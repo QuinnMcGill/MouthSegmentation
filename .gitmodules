@@ -1,0 +1,3 @@
+[submodule "external/TongueSAM"]
+	path = external/TongueSAM
+	url = https://github.com/QuinnMcGill/TongueSAM.git
