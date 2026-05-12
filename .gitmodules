@@ -1,3 +1,6 @@
 [submodule "external/TongueSAM"]
 	path = external/TongueSAM
 	url = https://github.com/QuinnMcGill/TongueSAM.git
+[submodule "external/sam2"]
+	path = external/sam2
+	url = https://github.com/facebookresearch/sam2.git
