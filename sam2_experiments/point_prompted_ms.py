@@ -18,8 +18,8 @@ from PIL import Image
 import cv2
 
 # SAM2
-from external.sam2.sam2.build_sam import build_sam2_video_predictor
-
+from sam2.build_sam import build_sam2_video_predictor
+from sam2.sam2_video_predictor import SAM2VideoPredictor
 
 # ====== Step 1: Setup the environment ====== #
 
@@ -67,13 +67,11 @@ def show_mask(mask, ax, obj_id=None, random_color=False):
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
 
-
 def show_points(coords, labels, ax, marker_size=200):
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
     ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
     ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-
 
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
@@ -162,9 +160,20 @@ def get_prompt_points(frame, mouth_part):
 # ====== Step 3: Load the SAM2 model ====== #
 
 sam2_checkpoint = os.path.join("external/sam2/checkpoints", args.sc)
-model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+model_cfg = "configs/sam2.1/sam2.1_hiera_s.yaml"
 
-predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device.type)
+predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device.type) # Build the SAM2 model using pretrained weights
+
+# Load the fine-tuned model weights
+state_dict = torch.load(
+    "finetuned_weights/2.1s_lipseg.torch",
+    map_location=device
+)
+predictor.load_state_dict(state_dict)
+
+# The modek is wrapped in a predictor class, which simplifies the process of setting images, 
+# encoding prompts, and decoding masks.
+#predictor = SAM2VideoPredictor(sam2_model)
 
 # ====== Step 4: Load the video and perform segmentation ====== #
 
@@ -211,6 +220,8 @@ ann_obj_id = 1  # give a unique id to each object we interact with (it can be an
 obj_ids.append({"upper_lip": ann_obj_id})
 
 # Add positive and negative clicks
+# points_ul = np.array([[960, 2205],[871, 2282]], dtype=np.float32)
+# labels_ul = np.array([1, 1], dtype=np.int64)
 points_ul, labels_ul = get_prompt_points(
     frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
     mouth_part="upper lip"
@@ -225,7 +236,7 @@ _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
     labels=labels_ul,
 )
 
-# ------ Bottom Lip ------
+# # ------ Bottom Lip ------
 ann_frame_idx = 0  # the frame index we interact with
 ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
 
@@ -245,24 +256,24 @@ _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
 )
 
 # ------ Tongue ------
-ann_frame_idx = 180  # the frame index we interact with
-ann_obj_id = 3  # give a unique id to each object we interact with (it can be any integers)
-obj_ids.append({"tongue": ann_obj_id})
+# ann_frame_idx = 450  # the frame index we interact with
+# ann_obj_id = 3  # give a unique id to each object we interact with (it can be any integers)
+# obj_ids.append({"tongue": ann_obj_id})
 
-# Add positive and negative clicks
-points_tg, labels_tg = get_prompt_points(
-    frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    mouth_part="tongue"
-)
+# # Add positive and negative clicks
+# points_tg, labels_tg = get_prompt_points(
+#     frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+#     mouth_part="tongue"
+# )
 
-# Add prompts and get predictions
-_, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-    inference_state=inference_state,
-    frame_idx=ann_frame_idx,
-    obj_id=ann_obj_id,
-    points=points_tg,
-    labels=labels_tg,
-)
+# # Add prompts and get predictions
+# _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+#     inference_state=inference_state,
+#     frame_idx=ann_frame_idx,
+#     obj_id=ann_obj_id,
+#     points=points_tg,
+#     labels=labels_tg,
+# )
 
 # ====== Step 6: Run Video Object Segmentation and Tracking ====== #
 
@@ -298,7 +309,7 @@ if args.sv is True:
     height, width = first_frame.shape[:2]
 
     # Output video path
-    output_video_path = f"segmented_{args.v}"
+    output_video_path = f"point_seg_results/point_2part_segmented_finetuned_5p_{args.v}"
 
     # Video writer
     fps = 30
