@@ -17,10 +17,11 @@ import torch
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
+import pandas as pd
 
 # SAM2
-from sam2.build_sam import build_sam2_video_predictor
-from sam2.sam2_video_predictor import SAM2VideoPredictor
+from sam2.build_sam import build_sam2_video_predictor       #type:ignore
+from sam2.sam2_video_predictor import SAM2VideoPredictor    #type:ignore
 
 
 # ====== Step 1: Setup the environment ====== #
@@ -30,6 +31,8 @@ parser = argparse.ArgumentParser(description='Mouth Part Segmentation Script')
 parser.add_argument('--v', '--video_filename', type=str, default='tc5.mp4', help='.mp4 filename of test video in mocapvids directory')
 parser.add_argument('--sc', '--sam_checkpoint', type=str, default='sam2.1_hiera_large.pt', help='Name of SAM checkpoint file')
 parser.add_argument('--sv', '--save_video', type=bool, default=False, help='Whether to save the output segmentation video (boolean)')
+parser.add_argument('--npp', '--num_prompts_per_part', type=int, default=4, help='Number of prompts to add for each mouth part (integer)')
+parser.add_argument('--fw', '--finetuned_weights', type=str, default=None, help="Name of weights file in finetuned_weights folder")
 args = parser.parse_args()
 
 # select the device for computation
@@ -82,23 +85,28 @@ def show_box(box, ax):
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(patches.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0, 0, 0, 0), lw=2))
 
-def get_prompt_box(frame, mouth_part):
+
+def get_prompt_box(frame, mouth_part, color):
 
     print(
         f"Please draw a bounding box for {mouth_part}.\n"
         "Instructions:\n"
         "  - Click TOP LEFT corner\n"
         "  - Click BOTTOM RIGHT corner\n"
-        "  - Press ESC to finish\n"
+        "  - Press 'r' to redraw\n"
+        "  - Press 'n' if the object is NOT visible\n"
+        "  - Press ESC to confirm and close\n"
     )
 
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(frame)
-    ax.set_title(f"Bounding Box Prompt: {mouth_part}")
+    ax.set_title(f"Bounding Box Prompt: {mouth_part}", color=tuple(color / 255.0))
 
     clicked_points = []
+    point_artists = []
 
     bbox = [None]
+    object_missing = [False]
 
     rectangle_patch = [None]
 
@@ -110,6 +118,12 @@ def get_prompt_box(frame, mouth_part):
         if event.inaxes != ax:
             return
 
+        # Ignore additional clicks once a box exists.
+        # User must press 'r' to redraw.
+        if bbox[0] is not None:
+            print("Bounding box already exists. Press 'r' to redraw.")
+            return
+
         x = int(event.xdata)
         y = int(event.ydata)
 
@@ -117,16 +131,15 @@ def get_prompt_box(frame, mouth_part):
 
         print(f"Clicked: ({x}, {y})")
 
-        # Draw clicked point
-        ax.scatter(x, y, c='yellow', s=50)
+        point = ax.scatter(x, y, c="yellow", s=50)
+        point_artists.append(point)
+
         fig.canvas.draw()
 
-        # Once 2 points are selected -> create box
         if len(clicked_points) == 2:
 
             (x1, y1), (x2, y2) = clicked_points
 
-            # Ensure correct ordering
             x_min = min(x1, x2)
             y_min = min(y1, y2)
 
@@ -135,51 +148,77 @@ def get_prompt_box(frame, mouth_part):
 
             bbox[0] = [x_min, y_min, x_max, y_max]
 
-            width = x_max - x_min
-            height = y_max - y_min
-
-            # Remove old rectangle if it exists
-            if rectangle_patch[0] is not None:
-                rectangle_patch[0].remove()
-
-            # Draw rectangle
             rect = patches.Rectangle(
                 (x_min, y_min),
-                width,
-                height,
+                x_max - x_min,
+                y_max - y_min,
                 linewidth=2,
-                edgecolor='lime',
-                facecolor='none'
+                edgecolor="lime",
+                facecolor="none"
             )
 
             rectangle_patch[0] = rect
-
             ax.add_patch(rect)
 
             fig.canvas.draw()
 
             print(f"Bounding box: {bbox[0]}")
-            print("Press ESC to confirm and close.")
+            print("Press ESC to confirm or 'r' to redraw.")
 
     # ---------------------------------
     # Keyboard event
     # ---------------------------------
     def onkey(event):
 
-        if event.key == "escape":
+        # Mark object absent
+        if event.key == "n":
 
-            if bbox[0] is None:
+            object_missing[0] = True
+
+            print(f"{mouth_part} marked as NOT VISIBLE.")
+
+            plt.close(fig)
+
+        # Reset box and points
+        elif event.key == "r":
+
+            clicked_points.clear()
+            bbox[0] = None
+
+            if rectangle_patch[0] is not None:
+                rectangle_patch[0].remove()
+                rectangle_patch[0] = None
+
+            for artist in point_artists:
+                artist.remove()
+
+            point_artists.clear()
+
+            fig.canvas.draw()
+
+            print("Selection cleared. Draw a new bounding box.")
+
+        # Confirm and close
+        elif event.key == "escape":
+
+            if object_missing[0]:
+                print("Object marked as not visible.")
+
+            elif bbox[0] is None:
                 print("No bounding box selected.")
+
             else:
                 print("Bounding box confirmed.")
 
             plt.close(fig)
 
-    # Connect callbacks
-    fig.canvas.mpl_connect('button_press_event', onclick)
-    fig.canvas.mpl_connect('key_press_event', onkey)
+    fig.canvas.mpl_connect("button_press_event", onclick)
+    fig.canvas.mpl_connect("key_press_event", onkey)
 
     plt.show()
+
+    if object_missing[0]:
+        return None
 
     if bbox[0] is None:
         return None
@@ -189,16 +228,42 @@ def get_prompt_box(frame, mouth_part):
 # ====== Step 3: Load the SAM2 model ====== #
 
 sam2_checkpoint = os.path.join("external/sam2/checkpoints", args.sc)
+#sam2_checkpoint = "finetuned_weights/sam2_lapa_step_8000.pt"
 model_cfg = "configs/sam2.1/sam2.1_hiera_s.yaml"
 
 predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device.type) # Build the SAM2 model using pretrained weights
 
 # Load the fine-tuned model weights
-state_dict = torch.load(
-    "finetuned_weights/2.1s_lipseg.torch",
-    map_location=device
-)
-predictor.load_state_dict(state_dict)
+fw_idx = -1   # Only used if the user specifies the finetuned weights
+base_model = "sam2.1s"
+dataset = "lapa"
+if args.fw is not None:
+    # Get the row index of the results for these finetuned weights
+    ft_res_df = pd.read_csv("finetuning/finetuning_results.csv")
+    fw_idx = ft_res_df.index[ft_res_df['finetuned_weights'] == 'finetuned_weights/' + args.fw][0]
+
+    # Get the model type
+    base_model = ft_res_df.loc[fw_idx, 'base_model']
+
+    # Get the dataset
+    dataset_name = ft_res_df.loc[fw_idx, 'dataset']
+
+    fw_checkpoint = torch.load(
+        f='finetuned_weights/' + args.fw,
+        map_location=device,
+        weights_only=False
+    )
+
+    predictor.load_state_dict(
+        fw_checkpoint["model_state_dict"]
+    )
+
+    # state_dict = torch.load(
+    #     f"finetuned_weights/{args.fw}",
+    #     map_location=device,
+    #     weights_only=True
+    # )
+    # predictor.load_state_dict(state_dict)
 
 # ====== Step 4: Load the video and perform segmentation ====== #
 
@@ -239,61 +304,67 @@ mouth_parts = {
     }
 }
 
+prompt_spacing = len(frame_names) // args.npp
+
 # ------ Upper Lip ------
-ann_frame_idx = 0  # the frame index we interact with
-ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
-obj_ids.append({"upper_lip": ann_obj_id})
+for prompt_idx in range(args.npp):
+    ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
+    ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
 
-# Add positive and negative clicks
-box_ul = get_prompt_box(
-    frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    mouth_part="upper lip"
-)
+    # Add positive and negative clicks
+    box_ul = get_prompt_box(
+        frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+        mouth_part="upper lip", color = mouth_parts[1]["color"]
+    )
 
-# Add prompts and get predictions
-_, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-    inference_state=inference_state,
-    frame_idx=ann_frame_idx,
-    obj_id=ann_obj_id,
-    box=box_ul,
-)
+    # Add prompts and get predictions
+    if box_ul is not None:
+        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+            inference_state=inference_state,
+            frame_idx=ann_frame_idx,
+            obj_id=ann_obj_id,
+            box=box_ul,
+        )
 
 # ------ Bottom Lip ------
-ann_frame_idx = 0  # the frame index we interact with
-ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
+for prompt_idx in range(args.npp):
+    ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
+    ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
 
-# Add positive and negative clicks
-box_bl = get_prompt_box(
-    frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    mouth_part="bottom lip"
-)
+    # Add positive and negative clicks
+    box_bl = get_prompt_box(
+        frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+        mouth_part="bottom lip", color = mouth_parts[2]["color"]
+    )
 
-# Add prompts and get predictions
-_, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-    inference_state=inference_state,
-    frame_idx=ann_frame_idx,
-    obj_id=ann_obj_id,
-    box=box_bl,
-)
+    if box_bl is not None:
+        # Add prompts and get predictions
+        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+            inference_state=inference_state,
+            frame_idx=ann_frame_idx,
+            obj_id=ann_obj_id,
+            box=box_bl,
+        )
 
 # ------ Tongue ------
-ann_frame_idx = 180  # the frame index we interact with
-ann_obj_id = 3  # give a unique id to each object we interact with (it can be any integers)
-obj_ids.append({"tongue": ann_obj_id})
+for prompt_idx in range(args.npp):
+    ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
+    ann_obj_id = 3  # give a unique id to each object we interact with (it can be any integers)
 
-# Add positive and negative clicks
-box_tg = get_prompt_box(
-    frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    mouth_part="tongue"
-)
+    # Add positive and negative clicks
+    box_tg = get_prompt_box(
+        frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+        mouth_part="tongue", color = mouth_parts[3]["color"]
+    )
 
-# Add prompts and get predictions
-_, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-    inference_state=inference_state,
-    frame_idx=ann_frame_idx,
-    obj_id=ann_obj_id,
-    box=box_tg,
-)
+    # Add prompts and get predictions
+    if box_tg is not None:
+        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+            inference_state=inference_state,
+            frame_idx=ann_frame_idx,
+            obj_id=ann_obj_id,
+            box=box_tg,
+        )
 
 # ====== Step 6: Run Video Object Segmentation and Tracking ====== #
 
@@ -307,21 +378,21 @@ for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
 
 
 # ====== STEP 7: Visualize some of the segmented frames ====== #
-frame_stride = 30
-for out_frame_idx in range(0, len(frame_names), frame_stride):
-    plt.figure(figsize=(6, 4))
-    plt.title(f"frame {out_frame_idx}")
-    plt.imshow(Image.open(os.path.join(video_dir, frame_names[out_frame_idx])))
-    for out_obj_id, out_mask in video_segments[out_frame_idx].items():
-        show_mask(out_mask, plt.gca(), obj_id=out_obj_id)
+# frame_stride = 30
+# for out_frame_idx in range(0, len(frame_names), frame_stride):
+#     plt.figure(figsize=(6, 4))
+#     plt.title(f"frame {out_frame_idx}")
+#     plt.imshow(Image.open(os.path.join(video_dir, frame_names[out_frame_idx])))
+#     for out_obj_id, out_mask in video_segments[out_frame_idx].items():
+#         show_mask(out_mask, plt.gca(), obj_id=out_obj_id)
 
-    plt.axis('off')
-    plt.show()
+#     plt.axis('off')
+#     plt.show()
+
+
 
 # ====== Step 8 (Optional): Create Segmentation Video ====== #
 
-seg_parts = [list(obj_id.values())[0] for obj_id in obj_ids]
-print("Segmented parts: ", seg_parts)
 if args.sv is True:
     # Load first frame to get video dimensions
     first_frame = np.array(
@@ -331,8 +402,7 @@ if args.sv is True:
     height, width = first_frame.shape[:2]
 
     # Output video path
-    seg_parts = [list(obj_id.values())[0] for obj_id in obj_ids]
-    output_video_path = f"bb_seg_results/bb_seg_3part_finetuned_{args.v}"
+    output_video_path = f"bb_seg_results/bb_{base_model}_{dataset}_fw{fw_idx}_tongue_{args.v}"
 
     # Video writer
     fps = 30

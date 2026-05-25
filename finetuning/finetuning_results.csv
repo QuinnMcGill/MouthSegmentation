@@ -1,0 +1,2 @@
+dataset,base_model,batch_size,learning_rate,weight_decay,epochs,image_size,finetuned_weights,bbox_jitter,final_mean_train_iou,best_mean_val_iou,notes
+LaPa,sam2.1s,4,1e-05,4e-05,10,"(1024, 1024)",finetuned_weights/best_sam2.1s_lapa.pt,10,0.7068935,0.71125066,

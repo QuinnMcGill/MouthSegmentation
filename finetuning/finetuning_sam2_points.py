@@ -106,7 +106,7 @@ for it in range(num_iterations):
         prd_masks = predictor._transforms.postprocess_masks(low_res_masks, predictor._orig_hw[-1])  # Upscale the masks to the original image size
 
         # Segmentation Loss Calculation
-        gt_mask  = torch.tensor(mask.astype(np.float32), device=device)
+        gt_mask  = torch.tensor(mask.astype(np.float32), device=device)     # type: ignore
         prd_mask = torch.sigmoid(prd_masks[:,0])  # urn logit map into probability map
         seg_loss = (-gt_mask * torch.log(prd_mask + 0.00001) - (1 - gt_mask) * torch.log((1-prd_mask) + 0.00001)).mean()    # Cross Entropy Loss
 
@@ -130,7 +130,7 @@ for it in range(num_iterations):
         if it == 0: 
             mean_iou =0
 
-        mean_iou = mean_iou * 0.99 + 0.01 * np.mean(iou.cpu().detach().numpy())
+        mean_iou = mean_iou * 0.99 + 0.01 * np.mean(iou.cpu().detach().numpy())  # type: ignore
         if it%200 == 0:
             print(f"Iteration {it}, Loss: {loss.item():.4f}, Seg Loss: {seg_loss.item():.4f}, Score Loss: {score_loss.item():.4f}, Mean IoU: {mean_iou:.4f}")
 

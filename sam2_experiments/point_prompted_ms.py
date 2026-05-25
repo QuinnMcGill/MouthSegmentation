@@ -18,8 +18,8 @@ from PIL import Image
 import cv2
 
 # SAM2
-from sam2.build_sam import build_sam2_video_predictor
-from sam2.sam2_video_predictor import SAM2VideoPredictor
+from sam2.build_sam import build_sam2_video_predictor       #type:ignore
+from sam2.sam2_video_predictor import SAM2VideoPredictor    #type:ignore
 
 # ====== Step 1: Setup the environment ====== #
 
@@ -28,6 +28,7 @@ parser = argparse.ArgumentParser(description='Mouth Part Segmentation Script')
 parser.add_argument('--v', '--video_filename', type=str, default='tc5.mp4', help='.mp4 filename of test video in mocapvids directory')
 parser.add_argument('--sc', '--sam_checkpoint', type=str, default='sam2.1_hiera_large.pt', help='Name of SAM checkpoint file')
 parser.add_argument('--sv', '--save_video', type=bool, default=False, help='Whether to save the output segmentation video (boolean)')
+parser.add_argument('--npp', '--num_prompts_per_part', type=int, default=5, help='Number of prompts to add for each mouth part (integer)')
 args = parser.parse_args()
 
 # select the device for computation
@@ -76,7 +77,7 @@ def show_points(coords, labels, ax, marker_size=200):
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0, 0, 0, 0), lw=2))
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0, 0, 0, 0), lw=2))    # type: ignore
 
 def get_prompt_points(frame, mouth_part):
     points = []
@@ -107,7 +108,7 @@ def get_prompt_points(frame, mouth_part):
         x = int(event.xdata)
         y = int(event.ydata)
 
-        current_point[0] = (x, y)
+        current_point[0] = (x, y)   #type: ignore
 
         print(f"Selected point: ({x}, {y})")
         print("Press 'p' for positive or 'n' for negative")
@@ -123,7 +124,7 @@ def get_prompt_points(frame, mouth_part):
         if current_point[0] is None:
             return
 
-        x, y = current_point[0]
+        x, y = current_point[0]     #type: ignore
 
         # Positive point
         if event.key == "p":
@@ -215,45 +216,46 @@ mouth_parts = {
 }
 
 # ------ Upper Lip ------
-ann_frame_idx = 0  # the frame index we interact with
-ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
-obj_ids.append({"upper_lip": ann_obj_id})
+prompt_spacing = len(frame_names) // args.npp
+for prompt_idx in range(args.npp):
+    ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
+    ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
 
-# Add positive and negative clicks
-# points_ul = np.array([[960, 2205],[871, 2282]], dtype=np.float32)
-# labels_ul = np.array([1, 1], dtype=np.int64)
-points_ul, labels_ul = get_prompt_points(
-    frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    mouth_part="upper lip"
-)
+    # Add positive and negative clicks
+    # points_ul = np.array([[960, 2205],[871, 2282]], dtype=np.float32)
+    # labels_ul = np.array([1, 1], dtype=np.int64)
+    points_ul, labels_ul = get_prompt_points(
+        frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+        mouth_part="upper lip"
+    )
 
-# Add prompts and get predictions
-_, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-    inference_state=inference_state,
-    frame_idx=ann_frame_idx,
-    obj_id=ann_obj_id,
-    points=points_ul,
-    labels=labels_ul,
-)
+    # Add prompts and get predictions
+    _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+        inference_state=inference_state,
+        frame_idx=ann_frame_idx,
+        obj_id=ann_obj_id,
+        points=points_ul,
+        labels=labels_ul,
+    )
 
 # # ------ Bottom Lip ------
-ann_frame_idx = 0  # the frame index we interact with
-ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
+# ann_frame_idx = 0  # the frame index we interact with
+# ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
 
-# Add positive and negative clicks
-points_bl, labels_bl = get_prompt_points(
-    frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    mouth_part="bottom lip"
-)
+# # Add positive and negative clicks
+# points_bl, labels_bl = get_prompt_points(
+#     frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+#     mouth_part="bottom lip"
+# )
 
-# Add prompts and get predictions
-_, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-    inference_state=inference_state,
-    frame_idx=ann_frame_idx,
-    obj_id=ann_obj_id,
-    points=points_bl,
-    labels=labels_bl,
-)
+# # Add prompts and get predictions
+# _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+#     inference_state=inference_state,
+#     frame_idx=ann_frame_idx,
+#     obj_id=ann_obj_id,
+#     points=points_bl,
+#     labels=labels_bl,
+# )
 
 # ------ Tongue ------
 # ann_frame_idx = 450  # the frame index we interact with
@@ -309,7 +311,7 @@ if args.sv is True:
     height, width = first_frame.shape[:2]
 
     # Output video path
-    output_video_path = f"point_seg_results/point_2part_segmented_finetuned_5p_{args.v}"
+    output_video_path = f"point_seg_results/point_2part_segmented_finetuned_4prompts_{args.v}"
 
     # Video writer
     fps = 30
