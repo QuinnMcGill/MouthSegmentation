@@ -1,0 +1,7 @@
+dataset,base_model,batch_size,learning_rate,weight_decay,epochs,image_size,finetuned_weights,bbox_jitter,final_mean_train_iou,best_mean_val_iou,notes
+LaPa,sam2.1s,4,1e-05,4e-05,10,"(1024, 1024)",finetuning_sam2/finetuned_weights/best_sam2.1s_lapa.pt,10,0.7068935,0.71125066,
+LaPa,sam2.1s,16,1e-05,4e-05,10,"(1024, 1024)",finetuning_sam2/finetuned_weights/best_sam2.1s_lapa_doubled.pt,10,0.7104169130325317,0.7046578526496887,
+LaPa,sam2.1l,16,1e-05,4e-05,5,"(1024, 1024)",finetuning_sam2/finetuned_weights/best_sam2.1l_lapa_doubled.pt,10,0.7262,0.6123,Stopped after only 5 epochs due to overfitting. Mouth corners + bounding boxes
+LaPa,sam2.1t,8,1e-06,4e-05,10,"(1024, 1024)",finetuning_sam2/finetuned_weights/best_sam2.1t_lapa_doubled.pt,10,0.6949292421340942,0.6141642928123474,
+LaPa,sam2.1s,4,1e-05,4e-05,15,"(1024, 1024)",finetuning_sam2/finetuned_weights/best_sam2.1s_lapa_doubled_v2.pt,10,0.7279,0.7196,"Achieved best val IoU in 15th epoch (suggests increasing the number of epochs). Main change: ""high_res_features = predictor._features[""high_res_feats""]"". Corners were not used in training loss."
+LaPa,sam2.1s,4,1e-05,4e-05,20,"(1024, 1024)",finetuning_sam2/finetuned_weights/best_sam2.1s_lapa_doubled_v3.pt,10,0.7355835437774658,0.7223947048187256,Extended training to 20 epochs. Highest val mIoU was achieved in epoch 19. 

@@ -23,6 +23,10 @@ import pandas as pd
 from sam2.build_sam import build_sam2_video_predictor       #type:ignore
 from sam2.sam2_video_predictor import SAM2VideoPredictor    #type:ignore
 
+# Processing SAM2 Masks
+# import mediapipe_resources.mp_helpers as mph
+import mask_processing.mask_processor as mask_processor
+
 
 # ====== Step 1: Setup the environment ====== #
 
@@ -146,7 +150,7 @@ def get_prompt_box(frame, mouth_part, color):
             x_max = max(x1, x2)
             y_max = max(y1, y2)
 
-            bbox[0] = [x_min, y_min, x_max, y_max]
+            bbox[0] = [x_min, y_min, x_max, y_max]  # type:ignore
 
             rect = patches.Rectangle(
                 (x_min, y_min),
@@ -157,7 +161,7 @@ def get_prompt_box(frame, mouth_part, color):
                 facecolor="none"
             )
 
-            rectangle_patch[0] = rect
+            rectangle_patch[0] = rect   # type:ignore
             ax.add_patch(rect)
 
             fig.canvas.draw()
@@ -346,25 +350,25 @@ for prompt_idx in range(args.npp):
             box=box_bl,
         )
 
-# ------ Tongue ------
-for prompt_idx in range(args.npp):
-    ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
-    ann_obj_id = 3  # give a unique id to each object we interact with (it can be any integers)
+# # ------ Tongue ------
+# for prompt_idx in range(args.npp):
+#     ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
+#     ann_obj_id = 3  # give a unique id to each object we interact with (it can be any integers)
 
-    # Add positive and negative clicks
-    box_tg = get_prompt_box(
-        frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-        mouth_part="tongue", color = mouth_parts[3]["color"]
-    )
+#     # Add positive and negative clicks
+#     box_tg = get_prompt_box(
+#         frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+#         mouth_part="tongue", color = mouth_parts[3]["color"]
+#     )
 
-    # Add prompts and get predictions
-    if box_tg is not None:
-        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-            inference_state=inference_state,
-            frame_idx=ann_frame_idx,
-            obj_id=ann_obj_id,
-            box=box_tg,
-        )
+#     # Add prompts and get predictions
+#     if box_tg is not None:
+#         _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+#             inference_state=inference_state,
+#             frame_idx=ann_frame_idx,
+#             obj_id=ann_obj_id,
+#             box=box_tg,
+#         )
 
 # ====== Step 6: Run Video Object Segmentation and Tracking ====== #
 
@@ -402,7 +406,7 @@ if args.sv is True:
     height, width = first_frame.shape[:2]
 
     # Output video path
-    output_video_path = f"bb_seg_results/bb_{base_model}_{dataset}_fw{fw_idx}_tongue_{args.v}"
+    output_video_path = f"bb_seg_results/bb_{base_model}_{dataset}_fw{fw_idx}_{args.v}"
 
     # Video writer
     fps = 30
@@ -418,6 +422,7 @@ if args.sv is True:
     alpha = 0.5
 
     # ----- Generate Frames ------ #
+    example_frames = len(frame_names) // 5
 
     for frame_idx in range(len(frame_names)):
 
@@ -432,21 +437,27 @@ if args.sv is True:
         # Draw masks
         if frame_idx in video_segments:
 
-            for obj_id, mask in video_segments[frame_idx].items():
-
-                mask = mask.squeeze()
+            for obj_id, raw_mask in video_segments[frame_idx].items():
+                
+                raw_mask = raw_mask.squeeze()
+                if (frame_idx % example_frames == 0):
+                    clean_mask_result = mask_processor.clean_mask(raw_mask)
+                    mask_processor.visualize_mask_cleanup(
+                        raw_mask,
+                        clean_mask_result
+                    )
 
                 color = mouth_parts[obj_id]["color"]
 
                 # Apply transparent mask
-                overlay[mask] = (
+                overlay[raw_mask] = (
                     alpha * color +
-                    (1 - alpha) * overlay[mask]
+                    (1 - alpha) * overlay[raw_mask]
                 ).astype(np.uint8)
 
                 # Optional: draw contours
                 contours, _ = cv2.findContours(
-                    mask.astype(np.uint8),
+                    raw_mask.astype(np.uint8),
                     cv2.RETR_EXTERNAL,
                     cv2.CHAIN_APPROX_SIMPLE
                 )
@@ -460,7 +471,7 @@ if args.sv is True:
                 )
 
                 # Optional: add label text
-                ys, xs = np.where(mask)
+                ys, xs = np.where(raw_mask)
 
                 if len(xs) > 0 and len(ys) > 0:
 
@@ -494,7 +505,7 @@ if args.sv is True:
         )
 
         video_writer.write(output_frame_bgr)
-
+    
     # ====== Finalize ====== #
 
     video_writer.release()

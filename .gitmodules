@@ -4,3 +4,9 @@
 [submodule "external/sam2"]
 	path = external/sam2
 	url = https://github.com/facebookresearch/sam2.git
+[submodule "mediapipe"]
+	path = mediapipe
+	url = https://github.com/google-ai-edge/mediapipe.git
+[submodule "external/medipipe"]
+	path = external/medipipe
+	url = https://github.com/google-ai-edge/mediapipe.git
