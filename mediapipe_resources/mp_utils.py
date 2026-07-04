@@ -39,6 +39,14 @@ INNER_RIGHT_CORNER = 308
 INNER_TOP_MIDDLE = 13
 INNER_BOTTOM_MIDDLE = 14
 
+# Mapping MediaPipe Landmarks to lip contours
+MEDIAPIPE_MOUTH_LAYOUT = {
+    "upper_outer": [61,185,40,39,37,0,267,269,270,409,291],
+    "upper_inner": [78,191,80,81,82,13,312,311,310,415,308],
+    "lower_outer": [61,146,91,181,84,17,314,405,321,375,291],
+    "lower_inner": [78,95,88,178,87,14,317,402,318,324,308]
+}
+
 # For Visualization
 RED_COLOR = (255, 0, 0)
 
@@ -238,7 +246,7 @@ def draw_lip_contour_landmarks(rgb_image, detection_result):
             str(idx),
             (px + 3, py - 3),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            0.8,
             (0,0,255),
             1
         )

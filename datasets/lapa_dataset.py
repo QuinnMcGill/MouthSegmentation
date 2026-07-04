@@ -6,7 +6,6 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-
 class LaPaLipDataset(Dataset):
     """
     Dataset for lip segmentation using the LaPa dataset.
@@ -115,7 +114,6 @@ class LaPaLipDataset(Dataset):
         # Optional: load landmarks
         # -----------------------------
         landmarks = None
-        visibility_labels = None
 
         landmark_path = self.landmarks_dir / f"{image_path.stem}.txt"
 
@@ -137,13 +135,10 @@ class LaPaLipDataset(Dataset):
             #   102 = center of bottom lip inner contour
             #   101-103 = lower lip inner contour (3 points)
 
-            # mouth_landmark_range = range(84, 104)
             mouth_landmark_range = range(84, 104)
 
             with open(landmark_path, "r") as f:
                 lines = [line.strip() for line in f.readlines()]
-
-            num_landmarks = int(lines[0])
 
             landmarks = []
 
@@ -165,8 +160,6 @@ class LaPaLipDataset(Dataset):
                     f"found {len(landmarks)} in {landmark_path}"
                 )
             
-            #visibility_labels = self.create_visibility_labels(landmarks, [upper_lip_mask, lower_lip_mask])
-
         # -----------------------------
         # Optional: load mouth corners
         # -----------------------------
@@ -270,66 +263,496 @@ class LaPaLipDataset(Dataset):
             sample["lip_corners"] = lip_corners
 
         return sample
+
+def resample_contour(contour, n_points):
+    """
+    Resample a polyline to exactly n_points.
+
+    contour:
+        [N,2]
+
+    returns:
+        [n_points,2]
+    """
+
+    contour = np.asarray(contour, dtype=np.float32)
+
+    segment_lengths = np.linalg.norm(
+        contour[1:] - contour[:-1],
+        axis=1
+    )
+
+    cumulative = np.concatenate(
+        [[0.0], np.cumsum(segment_lengths)]
+    )
+
+    total_length = cumulative[-1]
+
+    target_distances = np.linspace(
+        0,
+        total_length,
+        n_points
+    )
+
+    result = []
+
+    for d in target_distances:
+
+        idx = np.searchsorted(cumulative, d) - 1
+        idx = np.clip(idx, 0, len(segment_lengths)-1)
+
+        seg_start = cumulative[idx]
+        seg_end = cumulative[idx+1]
+
+        t = (d - seg_start) / max(seg_end - seg_start, 1e-8)
+
+        p = (
+            (1 - t) * contour[idx]
+            + t * contour[idx + 1]
+        )
+
+        result.append(p)
+
+    return np.array(result, dtype=np.float32)
+
+def lapa_to_mediapipe_mouth(landmarks):
+    """
+    landmarks:
+        [20,2] LaPa mouth landmarks
+
+    returns:
+        dict:
+            mediapipe landmark id -> (x,y)
+    """
+
+    # -------------------
+    # Extract contours
+    # -------------------
+
+    # upper_outer = landmarks[0:7]
+    upper_outer_left = landmarks[0:4]
+    upper_outer_right = landmarks[3:7]
+
+    # lower_outer = np.array([
+    #     landmarks[0],    # 84
+    #     landmarks[11],   # 95
+    #     landmarks[10],   # 94
+    #     landmarks[9],    # 93
+    #     landmarks[8],    # 92
+    #     landmarks[7],    # 91
+    #     landmarks[6],    # 90
+    # ])
+    lower_outer_left = np.array([
+        landmarks[0],    # 84
+        landmarks[11],   # 95
+        landmarks[10],   # 94
+        landmarks[9],    # 93
+    ])
+
+    lower_outer_right = np.array([
+        landmarks[9],    # 93
+        landmarks[8],    # 92
+        landmarks[7],    # 91
+        landmarks[6],    # 90
+    ])
+
+    # upper_inner = landmarks[12:17]
+    upper_inner_left = landmarks[12:15]
+    upper_inner_right = landmarks[14:17]
+
+    # lower_inner = np.array([
+    #     landmarks[12],   # 96
+    #     landmarks[19],   # 103
+    #     landmarks[18],   # 102
+    #     landmarks[17],   # 101
+    #     landmarks[16],   # 100
+    # ])
+    lower_inner_left = np.array([
+        landmarks[12],   # 96
+        landmarks[19],   # 103
+        landmarks[18],   # 102
+    ])
+
+
+    lower_inner_right = np.array([
+        landmarks[18],   # 102
+        landmarks[17],   # 101
+        landmarks[16],   # 100
+    ])
+
+    # -------------------
+    # Resample
+    # -------------------
+
+    # upper_outer_mp = resample_contour(
+    #     upper_outer,
+    #     11
+    # )
+
+    upper_outer_left_mp = resample_contour(
+        upper_outer_left,
+        6
+    )
     
-    # TODO: this is a very simple heuristic for visibility - does
-    # NOT work consistently. Consider adding a threshold for the distance betwen the 
-    # landmark and the nearest point in the mask, or some other more robust method.
-    # def create_visibility_labels(self, landmarks, masks):
-    #     """
-    #     Create binary visibility labels for each landmark based on whether
-    #     it falls within the lip masks.
+    upper_outer_right_mp = resample_contour(
+        upper_outer_right,
+        6
+    )
 
-    #     Args:
-    #         landmarks: Tensor [N, 2]
-    #         masks: Tensor [2, H, W]
+    # lower_outer_mp = resample_contour(
+    #     lower_outer,
+    #     11
+    # )
 
-    #     Returns:
-    #         visibilities: Tensor [N]
-    #     """
-    #     visibilities = torch.zeros(landmarks.shape[0], dtype=torch.float32, device=landmarks.device)    # Assume all are visible
+    lower_outer_left_mp = resample_contour(
+        lower_outer_left,
+        6
+    )
+    lower_outer_right_mp = resample_contour(
+        lower_outer_right,
+        6
+    )
 
-    #     for i, (x, y) in enumerate(landmarks):
-    #         # Check if the landmark falls within any of the lip masks
-    #         for mask in masks:
-    #             if mask[int(y), int(x)] == 1:
-    #                 visibilities[i] = 1  
-    #                 break
+    # upper_inner_mp = resample_contour(
+    #     upper_inner,
+    #     11
+    # )
 
-    #         if visibilities[i] != 1:
-    #             print(f"Landmark {i} on image {self.image_paths[i]} is not a part of any lip mask.")
-    #     return visibilities
+    upper_inner_left_mp = resample_contour(
+        upper_inner_left,
+        6
+    )
+
+    upper_inner_right_mp = resample_contour(
+        upper_inner_right,
+        6
+    )
+
+    # lower_inner_mp = resample_contour(
+    #     lower_inner,
+    #     11
+    # )
+
+    lower_inner_left_mp = resample_contour(
+        lower_inner_left,
+        6
+    )
+
+    lower_inner_right_mp = resample_contour(
+        lower_inner_right,
+        6
+    )
+
+    # -------------------
+    # Assign MP ids
+    # -------------------
+
+    mp = {}
+
+    # upper_outer_ids = [
+    #     61,185,40,39,37,
+    #     0,
+    #     267,269,270,409,291
+    # ]
+
+    upper_outer_left_ids = [
+        61,185,40,39,37,
+        0,
+    ]
+    
+    upper_outer_right_ids = [
+        0,
+        267,269,270,409,291
+    ]
+
+    # upper_inner_ids = [
+    #     78,191,80,81,82,
+    #     13,
+    #     312,311,310,415,308
+    # ]
+
+    upper_inner_left_ids = [
+        78,191,80,81,82,
+        13
+    ]
+
+    upper_inner_right_ids = [
+        13,
+        312,311,310,415,308
+    ]
+
+    # lower_outer_ids = [
+    #     61,146,91,181,84,
+    #     17,
+    #     314,405,321,375,291
+    # ]
+
+    lower_outer_left_ids = [
+        61,146,91,181,84,
+        17
+    ]
+
+    lower_outer_right_ids = [
+        17,
+        314,405,321,375,291
+    ]
+
+    # lower_inner_ids = [
+    #     78,95,88,178,87,
+    #     14,
+    #     317,402,318,324,308
+    # ]
+
+    lower_inner_left_ids = [
+        78,95,88,178,87,
+        14
+    ]
+
+    lower_inner_right_ids = [
+        14,
+        317,402,318,324,308
+    ]
+
+    # for idx, mp_id in enumerate(upper_outer_ids):
+    #     mp[mp_id] = upper_outer_mp[idx]
+
+    # for idx, mp_id in enumerate(upper_inner_ids):
+    #     mp[mp_id] = upper_inner_mp[idx]
+
+    # for idx, mp_id in enumerate(lower_outer_ids):
+    #     mp[mp_id] = lower_outer_mp[idx]
+
+    # for idx, mp_id in enumerate(lower_inner_ids):
+    #     mp[mp_id] = lower_inner_mp[idx]
+
+    for idx, mp_id in enumerate(upper_outer_left_ids):
+        mp[mp_id] = upper_outer_left_mp[idx]
+
+    for idx, mp_id in enumerate(upper_outer_right_ids):
+        mp[mp_id] = upper_outer_right_mp[idx]
+
+    for idx, mp_id in enumerate(upper_inner_left_ids):
+        mp[mp_id] = upper_inner_left_mp[idx]
+
+    for idx, mp_id in enumerate(upper_inner_right_ids):
+        mp[mp_id] = upper_inner_right_mp[idx]
+
+    for idx, mp_id in enumerate(lower_outer_left_ids):
+        mp[mp_id] = lower_outer_left_mp[idx]
+
+    for idx, mp_id in enumerate(lower_outer_right_ids):
+        mp[mp_id] = lower_outer_right_mp[idx]
+
+    for idx, mp_id in enumerate(lower_inner_left_ids):
+        mp[mp_id] = lower_inner_left_mp[idx]
+
+    for idx, mp_id in enumerate(lower_inner_right_ids):
+        mp[mp_id] = lower_inner_right_mp[idx]
+
+    return mp
+
+# MP_IDS = [
+#     # upper outer
+#     61,185,40,39,37,0,267,269,270,409,291,
+
+#     # lower outer
+#     61,146,91,181,84,17,314,405,321,375,291,
+
+#     # upper inner
+#     78,191,80,81,82,13,312,311,310,415,308,
+
+#     # lower inner
+#     78,95,88,178,87,14,317,402,318,324,308
+# ]
+
+MP_IDS = [
+    # upper outer left
+    61,185,40,39,37,0,
+    # upper outer right
+    0,267,269,270,409,291,
+    # lower outer left
+    61,146,91,181,84,17,
+    # lower outer right
+    17,314,405,321,375,291,
+    # upper inner left
+    78,191,80,81,82,13,
+    # upper inner right
+    13,312,311,310,415,308,
+    # lower inner left
+    78,95,88,178,87,14,
+    # lower inner right
+    14,317,402,318,324,308
+]
+
+
+def mp_dict_to_array(mp_dict):
+    return np.array(
+        [mp_dict[idx] for idx in MP_IDS],
+        dtype=np.float32
+    )
+
+def draw_contour(ax, points, color, closed=False):
+
+    ax.plot(
+        points[:,0],
+        points[:,1],
+        color=color,
+        linewidth=2
+    )
+
+    if closed:
+        ax.plot(
+            [points[-1,0], points[0,0]],
+            [points[-1,1], points[0,1]],
+            color=color,
+            linewidth=2
+        )
+
+def visualize_lapa_vs_mp(image, lapa_landmarks):
+
+    mp_dict = lapa_to_mediapipe_mouth(lapa_landmarks)
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(14,7)
+    )
+
+    # ------------------------
+    # LEFT: LaPa
+    # ------------------------
+
+    axes[0].imshow(image)
+
+    axes[0].scatter(
+        lapa_landmarks[:,0],
+        lapa_landmarks[:,1],
+        c="red",
+        s=25
+    )
+
+    # for i, (x,y) in enumerate(lapa_landmarks):
+    #     axes[0].text(
+    #         x,
+    #         y,
+    #         str(i+84),
+    #         fontsize=8,
+    #         color="yellow"
+    #     )
+
+    axes[0].set_title("LaPa (20 landmarks)")
+    axes[0].axis("off")
+
+    # ------------------------
+    # RIGHT: Generated MP
+    # ------------------------
+
+    axes[1].imshow(image)
+
+    upper_outer = np.array([
+        mp_dict[idx]
+        for idx in [61,185,40,39,37,0,267,269,270,409,291]
+    ])
+
+    lower_outer = np.array([
+        mp_dict[idx]
+        for idx in [61,146,91,181,84,17,314,405,321,375,291]
+    ])
+
+    upper_inner = np.array([
+        mp_dict[idx]
+        for idx in [78,191,80,81,82,13,312,311,310,415,308]
+    ])
+
+    lower_inner = np.array([
+        mp_dict[idx]
+        for idx in [78,95,88,178,87,14,317,402,318,324,308]
+    ])
+
+    draw_contour(
+        axes[1],
+        upper_outer,
+        "red"
+    )
+
+    draw_contour(
+        axes[1],
+        lower_outer,
+        "blue"
+    )
+
+    draw_contour(
+        axes[1],
+        upper_inner,
+        "lime"
+    )
+
+    draw_contour(
+        axes[1],
+        lower_inner,
+        "yellow"
+    )
+
+    mp_array = mp_dict_to_array(mp_dict)
+
+    axes[1].scatter(
+        mp_array[:,0],
+        mp_array[:,1],
+        c="white",
+        s=12
+    )
+
+    axes[1].set_title("Generated MediaPipe Layout")
+    axes[1].axis("off")
+
+    plt.tight_layout()
+    plt.show()
 
 # ------------ SCRIPT FOR TESTING DATASET ------------
-# from torch.utils.data import DataLoader
-# import matplotlib.pyplot as plt
-# import numpy as np
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+import numpy as np
 
-# # from datasets.lapa_dataset import LaPaLipDataset
-# dataset_path = "/home/quinnm/.cache/downloaded_datasets/LaPa"
+# from datasets.lapa_dataset import LaPaLipDataset
+dataset_path = "/home/quinnm/.cache/downloaded_datasets/LaPa"
 
-# train_dataset = LaPaLipDataset(
-#     root_dir=dataset_path,
-#     split="train",
-#     image_size=(512, 512),
-#     landmarks=True,
-#     lip_corners=True
-# )
+train_dataset = LaPaLipDataset(
+    root_dir=dataset_path,
+    split="train",
+    image_size=(512, 512),
+    landmarks=True,
+    lip_corners=True
+)
 
-# train_loader = DataLoader(
-#     train_dataset,
-#     batch_size=4,
-#     shuffle=True,
-#     num_workers=4,
-# )
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=4,
+    shuffle=True,
+    num_workers=4,
+)
 
-# batch = next(iter(train_loader))
+batch = next(iter(train_loader))
 
-# print("Image shape:", batch["image"].shape)
-# print("Mask shape:", batch["mask"].shape)
-# print("Landmarks shape:", batch["landmarks"].shape)
-# print("Lip corners shape:", batch["lip_corners"].shape)
+print("Image shape:", batch["image"].shape)
+print("Mask shape:", batch["mask"].shape)
+print("Landmarks shape:", batch["landmarks"].shape)
 
-# print("Lip corners:", batch["lip_corners"])
+for _ in range(10):
+
+    idx = np.random.randint(len(train_dataset))
+
+    sample = train_dataset[idx]
+
+    image = sample["image"].permute(1,2,0).numpy()
+
+    lapa_landmarks = sample["landmarks"].numpy()
+
+    visualize_lapa_vs_mp(
+        image,
+        lapa_landmarks
+    )
+
+
 # # # --------------------------------------------------
 # # # Visualize first sample in batch
 # # # --------------------------------------------------
@@ -377,8 +800,8 @@ class LaPaLipDataset(Dataset):
 #     # colors = ["blue" if vis == 1.0 else "yellow" for vis in visibility_labels]
 
 #     axes[0].scatter(
-#         lip_corners[:, 0],
-#         lip_corners[:, 1],
+#         landmarks[:, 0],
+#         landmarks[:, 1],
 #         s=10,
 #         # c=colors
 #     )
@@ -390,8 +813,8 @@ class LaPaLipDataset(Dataset):
 #     axes[1].imshow(mask_vis)
 
 #     axes[1].scatter(
-#         lip_corners[:, 0],
-#         lip_corners[:, 1],
+#         landmarks[:, 0],
+#         landmarks[:, 1],
 #         s=10,
 #         # c=colors
 #     )

@@ -33,6 +33,7 @@ output_video_path = OUTPUT_PATH_ROOT + tc_name + "_mediapipe.mp4"
 base_options = python.BaseOptions(model_asset_path="mediapipe_resources/face_landmarker.task")
 options = vision.FaceLandmarkerOptions(base_options=base_options, running_mode=vision.RunningMode.VIDEO, output_face_blendshapes=False, num_faces=1)
 detector = vision.FaceLandmarker.create_from_options(options)
+print("Built the model")
 
 # Load the video file
 cv2.namedWindow("MediaPipe Facial Motion Capture", cv2.WINDOW_NORMAL)

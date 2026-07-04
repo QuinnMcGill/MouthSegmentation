@@ -46,6 +46,7 @@ parser = argparse.ArgumentParser(description='Refine MediaPipe mouth landmarks u
 parser.add_argument('--v', '--video_filename', type=str, default='tc6.mp4', help='.mp4 filename of test video in mocapvids directory')
 parser.add_argument('--debug', '--debug_mode', type=int, default=0, help='Enter 1 if you want to load the saved state (default: 0)')
 parser.add_argument('--bm', '--base_model', type=str, default='s', help='SAM2.1 base model (options: s, b, l, t)')
+parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya" or "lapa")')
 parser.add_argument('--sv', '--save_video', type=int, default=0, help='Whether to save the output segmentation video (boolean)')
 parser.add_argument('--npp', '--num_prompts_per_part', type=int, default=4, help='Number of prompts to add for each mouth part (integer)')
 parser.add_argument('--fw', '--finetuned_weights', type=str, default=None, help="Name of weights file in finetuned_weights folder")
@@ -53,7 +54,7 @@ args = parser.parse_args()
 
 # Initialize some configuration parameters
 base_model = "sam2.1" + args.bm
-dataset = "lapa"    # for now, this is the only dataset
+dataset = args.d
 fw_idx = -1   
 # If the user would like to use finetuned weights, get the index of the finetuning results for these weights
 if args.fw is not None:
@@ -247,14 +248,14 @@ if not args.debug:
     mp_results_list = mp_utils.get_mp_landmarks(os.path.join("mocapvids", args.v), mp_detector)
     mp_lip_results_list = mp_utils.isolate_lip_landmarks(mp_results_list)
 
-    save_path = f"saved_states/{args.v.split('.mp4')[0]}_sam2_mp_results.npz"
+    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_mp_results.npz"
     save_state(sam2_video_segs, mp_lip_results_list, save_path)
 else:
     # If the user wants to load the saved state, we can skip the above steps and directly load the SAM2 
     # segmentation results and MediaPipe landmark predictions from a .npz file.
 
     # ====== Optional: Save the SAM2 segmentation results and MediaPipe landmark predictions ====== #
-    save_path = f"saved_states/{args.v.split('.mp4')[0]}_sam2_mp_results.npz"
+    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_mp_results.npz"
     sam2_video_segs, mp_lip_results_list = load_saved_state(save_path)
 
 num_example_frames = 6
@@ -269,6 +270,8 @@ with tqdm(total=len(mp_lip_results_list), desc="Refining MediaPipe Lip Landmarks
             for obj_id, raw_mask in frame_sam2_segs.items():
                 raw_mask = raw_mask.squeeze()
                 raw_mask = mask_processor.clean_mask(raw_mask)
+
+            
 
             refinement_utils.visualize_mp_sam_frame(
                 frame=np.array(Image.open(os.path.join(video_dir, frame_names[frame_idx]))),
@@ -330,7 +333,7 @@ if args.sv == 1:
     height, width = first_frame.shape[:2]
 
     # Output video path
-    output_video_path = f"bb_seg_results/bb_{base_model}_{dataset}_fw{fw_idx}_{args.v}"
+    output_video_path = f"sam2_guided_mp_results/{base_model}_{dataset}_fw{fw_idx}_{args.v}"
 
     # Video writer
     fps = 30

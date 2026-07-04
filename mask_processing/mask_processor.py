@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from mask_processing.utils import *
+from mask_processing.mask_processing_utils import *
 
 # ===== Mask Cleaning ===== #
 
@@ -146,24 +146,6 @@ def visualize_mask_cleanup(
         cv2.CHAIN_APPROX_SIMPLE
     )
 
-    clean_contours, _ = cv2.findContours(
-        cleaned_mask.astype(np.uint8),
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
-    )
-    if len(clean_contours) > 0:
-        clean_contour = max(clean_contours, key=cv2.contourArea)
-    else:
-        clean_contour = clean_contours[0]  # empty contour to avoid errors in drawing
-
-    # Smooth the clean contours
-    epsilon = 0.002 * cv2.arcLength(clean_contour, True)
-    smooth_clean_contour = cv2.approxPolyDP(
-        clean_contour,
-        epsilon,
-        True
-    )
-
     cv2.drawContours(
         raw_overlay,
         raw_contours,
@@ -172,13 +154,47 @@ def visualize_mask_cleanup(
         2
     )
 
-    cv2.drawContours(
-        clean_overlay,
-        smooth_clean_contour,
-        -1,
-        (255, 255, 255),
-        2
+    clean_contours, _ = cv2.findContours(
+        cleaned_mask.astype(np.uint8),
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
     )
+
+    if len(clean_contours) > 0:
+        clean_contour = max(
+            clean_contours,
+            key=cv2.contourArea
+        )
+
+        epsilon = (
+            0.002 *
+            cv2.arcLength(clean_contour, True)
+        )
+
+        smooth_clean_contour = cv2.approxPolyDP(
+            clean_contour,
+            epsilon,
+            True
+        )
+
+        cv2.drawContours(
+            clean_overlay,
+            [smooth_clean_contour],
+            -1,
+            (255, 255, 255),
+            2
+        )
+    else:
+
+        cv2.putText(
+            clean_overlay,
+            "No contour found",
+            (20, 80),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 255),
+            2
+        )
 
     # Labels
     cv2.putText(

@@ -4,6 +4,12 @@ UPPER_LIP_OBJ_ID = 1
 LOWER_LIP_OBJ_ID = 2
 TONGUE_OBJ_ID = 3
 
+# Assigning MediaPipe Landmarks to Lip Contours
+UPPER_LIP_OUTER_CONTOUR = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]
+UPPER_LIP_INNER_CONTROR = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308]
+LOWER_LIP_OUTER_CONTOUR = [146, 91, 181, 84, 17, 314, 314, 405, 321, 375]
+LOWER_LIP_INNER_CONTOUR = [95, 88, 178, 87, 14, 317, 402, 318, 324]
+
 def nearest_spline_point(
     landmark,
     spline

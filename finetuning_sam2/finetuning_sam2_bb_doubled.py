@@ -4,6 +4,9 @@ import numpy as np
 import cv2
 import torch
 import pandas as pd
+import argparse
+from torch.utils.data import random_split
+
 
 from torch.utils.data import DataLoader
 
@@ -11,8 +14,13 @@ from sam2.build_sam import build_sam2                       # type: ignore
 from sam2.sam2_image_predictor import SAM2ImagePredictor    # type: ignore
 
 from datasets.lapa_dataset import LaPaLipDataset
+from datasets.mayaFaces_dataset import MayaFacesDataset
 
 from finetuning_sam2 import finetuning_utils as ft_utils
+
+parser = argparse.ArgumentParser(description='Finetuning SAM2 for mouth segmentation')
+parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya" or "lapa")')
+args = parser.parse_args()
 
 # ============================================================
 # Configuration
@@ -20,10 +28,14 @@ from finetuning_sam2 import finetuning_utils as ft_utils
 
 DEVICE = "cuda"
 
-DATASET_ROOT = "/home/quinnm/.cache/downloaded_datasets/LaPa"
-DATASET_NAME = DATASET_ROOT.split("/")[-1].lower()
+if args.d not in ["lapa", "maya"]:
+    raise ValueError("Dataset not recognized!!")
+
+DATASET_ROOT = "/home/quinnm/.cache/downloaded_datasets/LaPa" if args.d == "lapa" else "datasets/MayaFaces"
+DATASET_NAME = args.d.upper()
 
 SAM2_CHECKPOINT = "external/sam2/checkpoints/sam2.1_hiera_small.pt"
+# SAM2_CHECKPOINT = "finetuning_sam2/finetuned_weights/best_sam2.1s_lapa_doubled_v3.pt"
 MODEL_CFG = "configs/sam2.1/sam2.1_hiera_s.yaml"
 SAM_MODEL = MODEL_CFG.split("/")[-1].split("_")[0] + MODEL_CFG.split("/")[-1].split(".yaml")[0][-1]
 
@@ -44,38 +56,76 @@ print("All configurations set. Starting training...")
 # ============================================================
 # Datasets
 # ============================================================
+if args.d == "lapa":
+    train_dataset = LaPaLipDataset(
+        root_dir=DATASET_ROOT,
+        split="train",
+        image_size=IMAGE_SIZE,
+        lip_corners=True,
+    )
 
-train_dataset = LaPaLipDataset(
-    root_dir=DATASET_ROOT,
-    split="train",
-    image_size=IMAGE_SIZE,
-    lip_corners=True,
-)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=4,
+        drop_last=False,
+    )
 
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=True,
-    num_workers=4,
-    drop_last=False,
-)
+    val_dataset = LaPaLipDataset(
+        root_dir=DATASET_ROOT,
+        split="val",
+        image_size=IMAGE_SIZE,
+        lip_corners=True,
+    )
 
-val_dataset = LaPaLipDataset(
-    root_dir=DATASET_ROOT,
-    split="val",
-    image_size=IMAGE_SIZE,
-    lip_corners=True,
-)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+    )
+else: 
+    maya_dataset = MayaFacesDataset(
+        root_dir=DATASET_ROOT,
+        transform=None
+    )
 
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-)
+    print(len(maya_dataset))
+
+    # Assume 80/20 split
+    train_size = int(0.8 * len(maya_dataset))
+    val_size = len(maya_dataset) - train_size
+
+    train_dataset, val_dataset = random_split(
+        maya_dataset,
+        [train_size, val_size],
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=4,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=4
+    )
 
 # ============================================================
 # Build SAM2
 # ============================================================
+
+# sam2_model = build_sam2(
+#     MODEL_CFG,
+#     SAM2_CHECKPOINT,
+#     device=DEVICE,
+# )
+
+# predictor = SAM2ImagePredictor(sam2_model)
 
 sam2_model = build_sam2(
     MODEL_CFG,
@@ -83,8 +133,17 @@ sam2_model = build_sam2(
     device=DEVICE,
 )
 
-predictor = SAM2ImagePredictor(sam2_model)
+fw_checkpoint = torch.load(
+    f="finetuning_sam2/finetuned_weights/best_sam2.1s_lapa_doubled_v3.pt",
+    map_location=DEVICE,
+    weights_only=False
+)
 
+sam2_model.load_state_dict(
+    fw_checkpoint["model_state_dict"]
+)
+
+predictor = SAM2ImagePredictor(sam2_model)
 
 # ============================================================
 # Training Mode
@@ -327,11 +386,16 @@ for epoch in range(MAX_EPOCHS):
 
         images = batch["image"]
         masks = batch["mask"]
-        lip_corners = batch["lip_corners"]
+        if args.d == "lapa":
+            lip_corners = batch["lip_corners"]
+        else: 
+            lip_corners = None
 
         batch_images = []
         batch_masks = []
         batch_boxes = []
+
+        # Only used if using LaPa dataset
         batch_lip_corners = []
         batch_cls = []
 
@@ -374,8 +438,9 @@ for epoch in range(MAX_EPOCHS):
                 batch_images.append(image_np)
                 batch_masks.append(mask_np)
                 batch_boxes.append(box)
-                batch_lip_corners.append(lip_corners[b].numpy())
-                batch_cls.append(cls_idx)
+                if args.d == "lapa" and lip_corners is not None:
+                    batch_lip_corners.append(lip_corners[b].numpy())
+                    batch_cls.append(cls_idx)
 
         # Skip invalid batches
         if len(batch_images) == 0:
@@ -428,10 +493,6 @@ for epoch in range(MAX_EPOCHS):
                 )
             )
 
-            # high_res_features = [
-            #     feat_level[-1].unsqueeze(0)
-            #     for feat_level in predictor._features["high_res_feats"]
-            # ]
             high_res_features = predictor._features["high_res_feats"]
 
             low_res_masks, prd_scores, _, _ = (
@@ -630,7 +691,7 @@ print("Training complete.")
 # ====================================================
 
 training_params = {
-    "dataset": DATASET_ROOT.split("/")[-1],
+    "dataset": DATASET_NAME,
     "base_model": SAM_MODEL,
     "batch_size": BATCH_SIZE,
     "learning_rate": LEARNING_RATE,
@@ -644,7 +705,7 @@ training_params = {
 results = {
     "final_mean_train_iou": mean_iou,
     "best_mean_val_iou": best_val_iou,
-    "notes": "",
+    "notes": "First attempt training on MayaFaces dataset. 800 samples across 4 characters. No transforms.",
 }
 
 save_results_to_csv(

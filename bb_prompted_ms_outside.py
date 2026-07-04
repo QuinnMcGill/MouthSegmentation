@@ -35,6 +35,7 @@ import mask_processing.mask_processor as mask_processor
 parser = argparse.ArgumentParser(description='Mouth Part Segmentation Script')
 parser.add_argument('--v', '--video_filename', type=str, default='tc5.mp4', help='.mp4 filename of test video in mocapvids directory')
 parser.add_argument('--sc', '--sam_checkpoint', type=str, default='sam2.1_hiera_large.pt', help='Name of SAM checkpoint file')
+parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya" or "lapa")')
 parser.add_argument('--sv', '--save_video', type=int, default=0, help='Whether to save the output segmentation video (boolean)')
 parser.add_argument('--npp', '--num_prompts_per_part', type=int, default=4, help='Number of prompts to add for each mouth part (integer)')
 parser.add_argument('--fw', '--finetuned_weights', type=str, default=None, help="Name of weights file in finetuned_weights folder")
@@ -74,17 +75,18 @@ predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device
 # Load the fine-tuned model weights
 fw_idx = -1   # Only used if the user specifies the finetuned weights
 base_model = "sam2.1s"
-dataset = "lapa"
+dataset = args.d
+
 if args.fw is not None:
     # Get the row index of the results for these finetuned weights
     ft_res_df = pd.read_csv("finetuning_sam2/finetuning_results.csv")
-    fw_idx = ft_res_df.index[ft_res_df['finetuned_weights'] == 'finetuned_weights/' + args.fw][0]
+    fw_idx = ft_res_df.index[ft_res_df['finetuned_weights'] == 'finetuning_sam2/finetuned_weights/' + args.fw][0]
 
     # Get the model type
     base_model = ft_res_df.loc[fw_idx, 'base_model']
 
     # Get the dataset
-    dataset_name = ft_res_df.loc[fw_idx, 'dataset']
+    dataset = ft_res_df.loc[fw_idx, 'dataset']
 
     fw_checkpoint = torch.load(
         f='finetuning_sam2/finetuned_weights/' + args.fw,
