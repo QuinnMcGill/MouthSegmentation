@@ -269,3 +269,49 @@ def print_lip_landmark_coordinates(detection_result):
 
     print(lip_points.shape)
     print(lip_points)
+
+def add_lms_to_frame(frame, frame_lm_list, draw_indices = True):
+    """
+    Takes any frame and adds annotated landmarks. Landmarks can be straight from MediaPipe or can 
+    be the sam2-influenced landmarks.
+
+    Parameters
+    ----------
+    frame : ndarray (RGB or BGR)
+        Video frame corresponding to frame_idx
+
+    frame_lm_list : list of normalized lip landmark locations (3D), along with their associated 
+                    MediaPipe landmark index
+    """
+
+    h, w = frame.shape[:2]
+
+    output_frame = frame.copy()
+
+    for lm in frame_lm_list:
+
+        mp_idx = int(lm[0])
+
+        px = int(lm[1] * w)
+        py = int(lm[2] * h)
+
+        cv2.circle(
+            output_frame,
+            (px, py),
+            3,
+            (255, 255, 255),  # Red
+            -1
+        )
+
+        if draw_indices:
+            cv2.putText(
+                output_frame,
+                str(mp_idx),
+                (px + 4, py - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (255, 255, 255),
+                1
+            )
+
+    return output_frame

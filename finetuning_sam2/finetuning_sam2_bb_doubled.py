@@ -7,7 +7,6 @@ import pandas as pd
 import argparse
 from torch.utils.data import random_split
 
-
 from torch.utils.data import DataLoader
 
 from sam2.build_sam import build_sam2                       # type: ignore               
@@ -15,11 +14,16 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor    # type: ignore
 
 from datasets.lapa_dataset import LaPaLipDataset
 from datasets.mayaFaces_dataset import MayaFacesDataset
+from datasets.hybrid_dataset import HybridDataset
 
 from finetuning_sam2 import finetuning_utils as ft_utils
 
 parser = argparse.ArgumentParser(description='Finetuning SAM2 for mouth segmentation')
-parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya" or "lapa")')
+parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya", "lapa", or "hybrid")')
+parser.add_argument('--bm', '--base_model', type=str, default='s', help='SAM2.1 base model (options: s, b, l, t)')
+parser.add_argument('--e', '--epochs', type=int, help='Number of training epochs')
+parser.add_argument('--bs', '--batch_size', type=int, help='Batch size')
+parser.add_argument('--n', '--training_notes', type=str, default='', help='Brief notes about this training attempt')
 args = parser.parse_args()
 
 # ============================================================
@@ -28,119 +32,60 @@ args = parser.parse_args()
 
 DEVICE = "cuda"
 
-if args.d not in ["lapa", "maya"]:
+# ---- Model Configuration ---- #
+if args.d not in ["lapa", "maya", "hybrid"]:
     raise ValueError("Dataset not recognized!!")
 
-DATASET_ROOT = "/home/quinnm/.cache/downloaded_datasets/LaPa" if args.d == "lapa" else "datasets/MayaFaces"
+if args.d == "lapa":
+    DATASET_ROOT = "/home/quinnm/.cache/downloaded_datasets/LaPa" 
+elif args.d == "maya":
+    DATASET_ROOT = "datasets/MayaFaces"
+else:
+    DATASET_ROOT = ["/home/quinnm/.cache/downloaded_datasets/LaPa", "datasets/MayaFaces"]
 DATASET_NAME = args.d.upper()
 
-SAM2_CHECKPOINT = "external/sam2/checkpoints/sam2.1_hiera_small.pt"
-# SAM2_CHECKPOINT = "finetuning_sam2/finetuned_weights/best_sam2.1s_lapa_doubled_v3.pt"
-MODEL_CFG = "configs/sam2.1/sam2.1_hiera_s.yaml"
-SAM_MODEL = MODEL_CFG.split("/")[-1].split("_")[0] + MODEL_CFG.split("/")[-1].split(".yaml")[0][-1]
+model_dict = {'s': 'small', 'b': 'base_plus', 'l': 'large', 't': 'tiny'}
 
-BATCH_SIZE = 4
-LEARNING_RATE = 1e-5
-WEIGHT_DECAY = 4e-5
+BASE_MODEL = "sam2.1" + args.bm
+SAM2_CHECKPOINT = "external/sam2/checkpoints/" + "sam2.1_hiera_" + model_dict[args.bm] + ".pt"
+MODEL_CFG = f"configs/sam2.1/sam2.1_hiera_{args.bm}.yaml"
+print("DATASET_NAME: ", DATASET_NAME)
+print("BASE_MODEL: ", BASE_MODEL)
+
+# ---- Training Parameter Configuration ---- #
+BATCH_SIZE = args.bs
+LEARNING_RATE = 3e-5
+WEIGHT_DECAY = 2e-5
 JITTER_VAL = 10
 
-MAX_EPOCHS = 20
+MAX_EPOCHS = args.e
 
 IMAGE_SIZE = (1024, 1024)
 
 SAVE_DIR = "finetuning_sam2/finetuned_weights"
 
 os.makedirs(SAVE_DIR, exist_ok=True)
-print("All configurations set. Starting training...")
+print("All configurations set. Creating datasets and dataloaders...")
 
 # ============================================================
-# Datasets
+# Datasets and Dataloaders
 # ============================================================
-if args.d == "lapa":
-    train_dataset = LaPaLipDataset(
-        root_dir=DATASET_ROOT,
-        split="train",
-        image_size=IMAGE_SIZE,
-        lip_corners=True,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=4,
-        drop_last=False,
-    )
-
-    val_dataset = LaPaLipDataset(
-        root_dir=DATASET_ROOT,
-        split="val",
-        image_size=IMAGE_SIZE,
-        lip_corners=True,
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-    )
-else: 
-    maya_dataset = MayaFacesDataset(
-        root_dir=DATASET_ROOT,
-        transform=None
-    )
-
-    print(len(maya_dataset))
-
-    # Assume 80/20 split
-    train_size = int(0.8 * len(maya_dataset))
-    val_size = len(maya_dataset) - train_size
-
-    train_dataset, val_dataset = random_split(
-        maya_dataset,
-        [train_size, val_size],
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=4,
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=4
-    )
+train_loader, val_loader = ft_utils.create_dataloaders(
+    dataset_name=DATASET_NAME.lower(),
+    dataset_root=DATASET_ROOT, 
+    image_size=IMAGE_SIZE,
+    batch_size=BATCH_SIZE
+)
+print("Training and validation dataloaders created. Starting training loop...")
 
 # ============================================================
 # Build SAM2
 # ============================================================
 
-# sam2_model = build_sam2(
-#     MODEL_CFG,
-#     SAM2_CHECKPOINT,
-#     device=DEVICE,
-# )
-
-# predictor = SAM2ImagePredictor(sam2_model)
-
 sam2_model = build_sam2(
     MODEL_CFG,
     SAM2_CHECKPOINT,
     device=DEVICE,
-)
-
-fw_checkpoint = torch.load(
-    f="finetuning_sam2/finetuned_weights/best_sam2.1s_lapa_doubled_v3.pt",
-    map_location=DEVICE,
-    weights_only=False
-)
-
-sam2_model.load_state_dict(
-    fw_checkpoint["model_state_dict"]
 )
 
 predictor = SAM2ImagePredictor(sam2_model)
@@ -160,7 +105,6 @@ predictor.model.image_encoder.eval()
 #
 # predictor.model.image_encoder.train(True)
 
-
 # ============================================================
 # Optimizer
 # ============================================================
@@ -173,7 +117,6 @@ optimizer = torch.optim.AdamW(
 )
 
 scaler = torch.amp.GradScaler("cuda" if torch.cuda.is_available() else "cpu") # type: ignore
-
 
 # ============================================================
 # Utility Functions
@@ -366,38 +309,30 @@ best_val_epoch = -1
 # File to save best model checkpoint
 checkpoint_path = os.path.join(
                     SAVE_DIR,
-                    f"best_{SAM_MODEL}_{DATASET_NAME}_doubled.pt"
+                    f"best_{BASE_MODEL}_{DATASET_NAME}.pt"
                 )
 
 if os.path.exists(checkpoint_path):
     ckpt_idx = 1
-    while os.path.exists(os.path.join(SAVE_DIR, f"best_{SAM_MODEL}_{DATASET_NAME}_doubled_v{ckpt_idx}.pt")):
+    while os.path.exists(os.path.join(SAVE_DIR, f"best_{BASE_MODEL}_{DATASET_NAME}_v{ckpt_idx}.pt")):
         ckpt_idx += 1
-    checkpoint_path = os.path.join(SAVE_DIR, f"best_{SAM_MODEL}_{DATASET_NAME}_doubled_v{ckpt_idx}.pt")
+    checkpoint_path = os.path.join(SAVE_DIR, f"best_{BASE_MODEL}_{DATASET_NAME}_v{ckpt_idx}.pt")
 
-for epoch in range(MAX_EPOCHS):
+for epoch in range(1, MAX_EPOCHS+1):
 
     print(f"\n===== EPOCH {epoch} =====")
 
     epoch_iou_sum = 0.0
     epoch_iou_count = 0
 
-    for batch in train_loader:
+    for batch_idx, batch in enumerate(train_loader):
 
         images = batch["image"]
         masks = batch["mask"]
-        if args.d == "lapa":
-            lip_corners = batch["lip_corners"]
-        else: 
-            lip_corners = None
 
         batch_images = []
         batch_masks = []
         batch_boxes = []
-
-        # Only used if using LaPa dataset
-        batch_lip_corners = []
-        batch_cls = []
 
         # ----------------------------------------------------
         # Build SAM-style training batch
@@ -438,26 +373,12 @@ for epoch in range(MAX_EPOCHS):
                 batch_images.append(image_np)
                 batch_masks.append(mask_np)
                 batch_boxes.append(box)
-                if args.d == "lapa" and lip_corners is not None:
-                    batch_lip_corners.append(lip_corners[b].numpy())
-                    batch_cls.append(cls_idx)
 
         # Skip invalid batches
         if len(batch_images) == 0:
             continue
 
         input_boxes = np.array(batch_boxes)
-
-        # point_coords = torch.stack(batch_lip_corners).to(
-        #     device=DEVICE,
-        #     dtype=torch.float32
-        # )
-
-        # point_labels = torch.ones(
-        #     (point_coords.shape[0], point_coords.shape[1]),
-        #     dtype=torch.int64,
-        #     device=DEVICE
-        # )  # (B, 2)
 
         gt_mask = torch.tensor(
             np.array(batch_masks),
@@ -538,46 +459,6 @@ for epoch in range(MAX_EPOCHS):
             seg_loss = bce_loss + d_loss
 
             # ====================================================
-            # Lip Corner Loss 
-            # ====================================================
-            # batch_cls = torch.tensor(batch_cls, device=DEVICE)
-
-            # upper_idx = batch_cls == 0
-            # lower_idx = batch_cls == 1
-
-            # upper_prd_masks = prd_mask[upper_idx]
-            # lower_prd_masks = prd_mask[lower_idx]
-
-            # gt_corners = torch.from_numpy(
-            #     np.stack(batch_lip_corners)
-            # ).to(DEVICE, dtype=torch.float32)
-
-            # upper_gt_corners = gt_corners[upper_idx]
-            # lower_gt_corners = gt_corners[lower_idx]
-
-            # upper_corner_loss, pred_upper = ft_utils.soft_corner_loss(
-            #     upper_prd_masks,
-            #     upper_gt_corners,
-            #     corner_type="upper",
-            # )
-
-            # lower_corner_loss, pred_lower = ft_utils.soft_corner_loss(
-            #     lower_prd_masks,
-            #     lower_gt_corners,
-            #     corner_type="lower",
-            # )
-
-            # corner_loss = ((
-            #     upper_corner_loss
-            #     + lower_corner_loss
-            # ) / 2) * 0.01
-
-            # avg_pred_corners = (
-            #     pred_upper_corners +
-            #     pred_lower_corners
-            # ) / 2
-
-            # ====================================================
             # IoU Calculation
             # ====================================================
 
@@ -634,12 +515,13 @@ for epoch in range(MAX_EPOCHS):
 
         mean_iou = epoch_iou_sum / epoch_iou_count
 
+        progress = 100.0 * (batch_idx + 1) / len(train_loader)
+
         print(
-            f"Step {global_step} (Epoch {epoch})| "
+            f"(Epoch {epoch}): {progress:6.2f}% | "
             f"Loss: {loss.item():.4f} | "
             f"BCE: {bce_loss.item():.4f} | "
             f"Dice: {d_loss.item():.4f} | "
-            #f"Corner Loss: {corner_loss.item():.4f} | "
             f"Mean IoU: {mean_iou:.4f} | "
             f"Best val IoU, {best_val_iou}, achieved in epoch {best_val_epoch}"
         )
@@ -692,7 +574,7 @@ print("Training complete.")
 
 training_params = {
     "dataset": DATASET_NAME,
-    "base_model": SAM_MODEL,
+    "base_model": BASE_MODEL,
     "batch_size": BATCH_SIZE,
     "learning_rate": LEARNING_RATE,
     "weight_decay": WEIGHT_DECAY,
@@ -705,7 +587,7 @@ training_params = {
 results = {
     "final_mean_train_iou": mean_iou,
     "best_mean_val_iou": best_val_iou,
-    "notes": "First attempt training on MayaFaces dataset. 800 samples across 4 characters. No transforms.",
+    "notes": args.n,
 }
 
 save_results_to_csv(

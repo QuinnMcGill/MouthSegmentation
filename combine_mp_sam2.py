@@ -34,6 +34,7 @@ import mediapipe_resources.mp_utils as mp_utils
 # Processing SAM2 Masks and refineing Mediapipe landmarks
 import mask_processing.mask_processor as mask_processor
 import refine_landmarks.landmark_refinement_utils as refinement_utils
+import refine_landmarks.op1_constrained_spline as con_spline
 
 # ====== Step 1: Setup the environment ====== #
 
@@ -46,9 +47,10 @@ parser = argparse.ArgumentParser(description='Refine MediaPipe mouth landmarks u
 parser.add_argument('--v', '--video_filename', type=str, default='tc6.mp4', help='.mp4 filename of test video in mocapvids directory')
 parser.add_argument('--debug', '--debug_mode', type=int, default=0, help='Enter 1 if you want to load the saved state (default: 0)')
 parser.add_argument('--bm', '--base_model', type=str, default='s', help='SAM2.1 base model (options: s, b, l, t)')
-parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya" or "lapa")')
+parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya", "lapa" or "hybrid")')
 parser.add_argument('--sv', '--save_video', type=int, default=0, help='Whether to save the output segmentation video (boolean)')
 parser.add_argument('--npp', '--num_prompts_per_part', type=int, default=4, help='Number of prompts to add for each mouth part (integer)')
+parser.add_argument('--cbb', '--create_bounding_boxes', type=int, default=0, help='Whether to create bounding boxes for each mouth part (1 or 0)')
 parser.add_argument('--fw', '--finetuned_weights', type=str, default=None, help="Name of weights file in finetuned_weights folder")
 args = parser.parse_args()
 
@@ -153,27 +155,46 @@ mouth_parts = {
 # We will add `args.npp` prompts for each mouth part, evenly spaced throughout the video.
 prompt_spacing = len(frame_names) // args.npp
 
-# ------ Upper Lip ------
-# For faster testing, the prompts for tc6.mp4 can be added by hardcoding some decent bounding boxes 
-# for each mouth part in each video.
-if not args.debug: 
-    decent_ul_boxes = [[408, 840, 628, 882], [377, 700, 608, 860], [428, 782, 684, 846], [446, 777, 692, 824]]
+if not args.debug:
+    # ------ Upper Lip ------
+    decent_ul_boxes = []
+    decent_ul_boxes_4 = [[408, 840, 628, 882], [377, 700, 608, 860], [428, 782, 684, 846], [446, 777, 692, 824]]
+    decent_ul_boxes_5 = [[412, 851, 621, 882], [432, 680, 684, 817], [463, 689, 695, 795], [457, 749, 684, 806], None]
+    decent_ul_boxes_6 = [[412, 838, 621, 882], [474, 780, 632, 858], [519, 713, 737, 811], [443, 769, 668, 851], [448, 757, 690, 795], [477, 744, 681, 800]]
+
+    if args.cbb == 0:   # Load the pre-made bounding boxes for the upper and bottom lips
+        if args.npp == 4:
+            decent_ul_boxes = decent_ul_boxes_4
+        elif args.npp == 5:
+            decent_ul_boxes = decent_ul_boxes_5
+        elif args.npp == 6:
+            decent_ul_boxes = decent_ul_boxes_6
+        else:
+            raise ValueError(f"Unsupported number of prompts per part: {args.npp}. Supported values are 4, 5, or 6.")
 
     for prompt_idx in range(args.npp):
         ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
         ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
 
-        # TODO: instead of hardcoding the boxes, we can also add the prompts interactively using the `get_prompt_box` 
-        # function defined above. This will allow us to easily experiment with different videos without needing to manually 
-        # find decent bounding boxes for each mouth part in each video. The downside is that it will be more time-consuming to add the prompts.
+        # Create/Select the bounding box
+        if args.cbb == 1:
+            box_ul = sam2_utils.generate_prompt_box(
+                frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+                mouth_part="upper lip", 
+                color = mouth_parts[1]["color"]
+            )
+            print("--> New ul box created: ", box_ul, '\n')
+        else:
+            if prompt_idx < len(decent_ul_boxes):
+                box_ul = decent_ul_boxes[prompt_idx]
+            else:
+                raise ValueError(f"Not enough pre-made bounding boxes for the upper lip. Requested {args.npp}, but only {len(decent_ul_boxes)} available.")
 
-        # Add positive and negative clicks
-        # box_ul = get_prompt_box(
-        #     frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-        #     mouth_part="upper lip", color = mouth_parts[1]["color"]
-        # )
-
-        box_ul = decent_ul_boxes[prompt_idx]
+        # Try adding additional points as prompts
+        points_ul, labels_ul = sam2_utils.generate_prompt_points(
+            frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="upper lip"
+        )
 
         # Add prompts and get predictions
         if box_ul is not None:
@@ -182,28 +203,49 @@ if not args.debug:
                 frame_idx=ann_frame_idx,
                 obj_id=ann_obj_id,
                 box=box_ul,
+                points=points_ul,
+                labels=labels_ul
             )
 
     # ------ Bottom Lip ------
-    # For faster testing, the prompts for tc6.mp4 can be added by hardcoding some decent bounding boxes 
-    # for each mouth part in each video.
-    decent_bl_boxes = [[406, 878, 626, 935], [392, 809, 583, 931], [414, 844, 708, 911], [434, 815, 704, 878]]
+    decent_bl_boxes = []
+    decent_bl_boxes_4 = [[406, 878, 626, 935], [392, 809, 583, 931], [414, 844, 708, 911], [434, 815, 704, 878]]
+    decent_bl_boxes_5 = [[417, 886, 626, 931], [423, 824, 681, 962], [468, 780, 675, 842], None, [448, 820, 706, 886]]
+    decent_bl_boxes_6 = [[417, 880, 630, 926], [486, 862, 626, 931], [539, 806, 746, 918], [423, 855, 712, 906], [450, 800, 699, 849], [470, 800, 695, 835]]
+
+    if args.cbb == 0:   # Load the pre-made bounding boxes for the upper and bottom lips
+        if args.npp == 4:
+            decent_bl_boxes = decent_bl_boxes_4
+        elif args.npp == 5:
+            decent_bl_boxes = decent_bl_boxes_5
+        elif args.npp == 6:
+            decent_bl_boxes = decent_bl_boxes_6
+        else:
+            raise ValueError(f"Unsupported number of prompts per part: {args.npp}. Supported values are 4, 5, or 6.")
 
     for prompt_idx in range(args.npp):
         ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
         ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
-        
-        # TODO: instead of hardcoding the boxes, we can also add the prompts interactively using the `get_prompt_box` 
-        # function defined above. This will allow us to easily experiment with different videos without needing to manually 
-        # find decent bounding boxes for each mouth part in each video. The downside is that it will be more time-consuming to add the prompts.
 
-        # Add positive and negative clicks
-        # box_bl = get_prompt_box(
-        #     frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-        #     mouth_part="bottom lip", color = mouth_parts[2]["color"]
-        # )
+        # Create/Select the bounding box
+        if args.cbb == 1:
+            box_bl = sam2_utils.generate_prompt_box(
+                frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+                mouth_part="bottom lip", 
+                color = mouth_parts[2]["color"]
+            )
+            print("--> New bl box created: ", box_bl, "\n")
+        else:
+            if prompt_idx < len(decent_bl_boxes):
+                box_bl = decent_bl_boxes[prompt_idx]
+            else:
+                raise ValueError(f"Not enough pre-made bounding boxes for the bottom lip. Requested {args.npp}, but only {len(decent_bl_boxes)} available.")
 
-        box_bl = decent_bl_boxes[prompt_idx]
+        # Try adding additional points as prompts
+        points_bl, labels_bl = sam2_utils.generate_prompt_points(
+            frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="bottom lip"
+        )
 
         if box_bl is not None:
             # Add prompts and get predictions
@@ -212,17 +254,20 @@ if not args.debug:
                 frame_idx=ann_frame_idx,
                 obj_id=ann_obj_id,
                 box=box_bl,
+                points=points_bl,
+                labels=labels_bl,
             )
 
-    # # ------ Tongue ------
+    # ------ Tongue ------
     # for prompt_idx in range(args.npp):
     #     ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
     #     ann_obj_id = 3  # give a unique id to each object we interact with (it can be any integers)
 
-    #     # Add positive and negative clicks
-    #     box_tg = get_prompt_box(
+    #     # Create bounding box
+    #     box_tg = sam2_utils.generate_prompt_box(
     #         frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    #         mouth_part="tongue", color = mouth_parts[3]["color"]
+    #         mouth_part="tongue", 
+    #         color = mouth_parts[3]["color"]
     #     )
 
     #     # Add prompts and get predictions
@@ -248,20 +293,21 @@ if not args.debug:
     mp_results_list = mp_utils.get_mp_landmarks(os.path.join("mocapvids", args.v), mp_detector)
     mp_lip_results_list = mp_utils.isolate_lip_landmarks(mp_results_list)
 
-    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_mp_results.npz"
+    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
     save_state(sam2_video_segs, mp_lip_results_list, save_path)
 else:
     # If the user wants to load the saved state, we can skip the above steps and directly load the SAM2 
     # segmentation results and MediaPipe landmark predictions from a .npz file.
 
     # ====== Optional: Save the SAM2 segmentation results and MediaPipe landmark predictions ====== #
-    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_mp_results.npz"
+    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
     sam2_video_segs, mp_lip_results_list = load_saved_state(save_path)
 
 num_example_frames = 6
 example_frame_inc = len(frame_names) // num_example_frames
 
 # ====== Step 8: Refine MediaPipe Predictions ====== #
+'''
 with tqdm(total=len(mp_lip_results_list), desc="Refining MediaPipe Lip Landmarks with SAM2 Masks") as pbar:
     for frame_idx, (frame_mp_lms, frame_sam2_segs) in enumerate(zip(mp_lip_results_list, sam2_video_segs.values())):
         if frame_idx % example_frame_inc == 0:
@@ -270,8 +316,6 @@ with tqdm(total=len(mp_lip_results_list), desc="Refining MediaPipe Lip Landmarks
             for obj_id, raw_mask in frame_sam2_segs.items():
                 raw_mask = raw_mask.squeeze()
                 raw_mask = mask_processor.clean_mask(raw_mask)
-
-            
 
             refinement_utils.visualize_mp_sam_frame(
                 frame=np.array(Image.open(os.path.join(video_dir, frame_names[frame_idx]))),
@@ -306,7 +350,7 @@ with tqdm(total=len(mp_lip_results_list), desc="Refining MediaPipe Lip Landmarks
         # # Update the refined landmarks in the list
         # mp_lip_results_list[frame_idx] = refined_landmarks
 
-        pbar.update(1)
+        pbar.update(1)'''
 
 # ====== STEP 9: Visualize some of the segmented frames ====== #
 # frame_stride = 30
@@ -333,7 +377,7 @@ if args.sv == 1:
     height, width = first_frame.shape[:2]
 
     # Output video path
-    output_video_path = f"sam2_guided_mp_results/{base_model}_{dataset}_fw{fw_idx}_{args.v}"
+    output_video_path = f"sam2_guided_mp_results/{base_model}_{dataset}_fw{fw_idx}_{args.npp}pp_{args.v}"
 
     # Video writer
     fps = 30
@@ -359,73 +403,180 @@ if args.sv == 1:
             Image.open(frame_path).convert("RGB")
         )
 
-        overlay = frame.copy()
+        output_frame = frame.copy()
+        h, w = frame.shape[:2]
 
         # Draw masks
         if frame_idx in sam2_video_segs:
 
             for obj_id, raw_mask in sam2_video_segs[frame_idx].items():
                 
-                raw_mask = raw_mask.squeeze()
-                if (frame_idx % example_frames == 0):
+                if obj_id == UPPER_LIP_OBJ_ID or obj_id == LOWER_LIP_OBJ_ID:   # Create sam2-points for upper and bottom lips
+                    raw_mask = raw_mask.squeeze()
+
+                    # Clean the raw sam2 mask to remove holes and noise
                     clean_mask_result = mask_processor.clean_mask(raw_mask)
-                    mask_processor.visualize_mask_cleanup(
-                        frame,
-                        raw_mask,
-                        clean_mask_result
-                    )
 
-                color = mouth_parts[obj_id]["color"]
+                    # Convert the cleaned mask into a smooth spline
+                    spline = mask_processor.mask_to_spline(clean_mask_result)
 
-                # Apply transparent mask
-                overlay[raw_mask] = (
-                    alpha * color +
-                    (1 - alpha) * overlay[raw_mask]
-                ).astype(np.uint8)
+                    # Find the Mediapipe-predicted mouth corners for anchoring
+                    inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner = con_spline.find_mp_corners(mp_lip_results_list[frame_idx], h, w)
 
-                # Optional: draw contours
-                contours, _ = cv2.findContours(
-                    raw_mask.astype(np.uint8),
-                    cv2.RETR_EXTERNAL,
-                    cv2.CHAIN_APPROX_SIMPLE
-                )
+                    # Sample points along the predicted SAM2 lip contours
+                    upper_points, lower_points = con_spline.refine_lip_contour(obj_id, spline, inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner, 11, output_frame)
 
-                cv2.drawContours(
-                    overlay,
-                    contours,
-                    -1,
-                    (255, 255, 255),
-                    2
-                )
+                    # Visualize some sample frames
+                    if (frame_idx % example_frames == 0):
+                        vis_frame = frame.copy()
+                        # Convert RGB -> BGR
+                        vis_frame = cv2.cvtColor(
+                            vis_frame,
+                            cv2.COLOR_RGB2BGR
+                        )
+                        '''
+                        # Visulaize the mask cleanup
+                        mask_processor.visualize_mask_cleanup(
+                            frame,
+                            raw_mask, 
+                            clean_mask_result
+                        )
 
-                # Optional: add label text
-                ys, xs = np.where(raw_mask)
+                        # Visualize the spline
+                        mask_processor.visualize_spline(
+                            frame,
+                            spline
+                        )
+                        '''
+                        #left_corner, right_corner = con_spline.find_mp_corner_midpoint(mp_lip_results_list[frame_idx], h, w)
+                        # inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner = con_spline.find_mp_corners(mp_lip_results_list[frame_idx], h, w)
+                        
+                        #upper_arc, lower_arc = con_spline.refine_lip_contour(spline, left_corner, right_corner, 11)
+                        # upper_points, lower_points = con_spline.refine_lip_contour_4(obj_id, spline, inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner, 11)
 
-                if len(xs) > 0 and len(ys) > 0:
+                        # corners = [inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner]
+                        # for corner in corners:
+                        #     cv2.circle(
+                        #         vis_frame,
+                        #         (corner[0], corner[1]),
+                        #         3,
+                        #         (0, 0, 0),  # Black
+                        #         -1
+                        #     )
 
-                    center_x = int(np.mean(xs))
-                    center_y = int(np.mean(ys))
+                        # if upper_arc is not None: # Only add spline if a lip was located
+                        #     pts = np.round(upper_arc).astype(np.int32)
 
-                    cv2.putText(
-                        overlay,
-                        mouth_parts[obj_id]["name"],
-                        (center_x, center_y),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (255, 255, 255),
-                        2,
-                        cv2.LINE_AA
-                    )
+                        #     # Draw closed polyline
+                        #     cv2.polylines(
+                        #         vis_frame,
+                        #         [pts],
+                        #         isClosed=False,
+                        #         color=(255, 0, 0),  # Green  
+                        #         thickness=2,
+                        #         lineType=cv2.LINE_AA
+                        #     )
+                        
+                        # if lower_arc is not None: # Only add spline if a lip was located
+                        #     pts = np.round(lower_arc).astype(np.int32)
 
-        # Blend overlay with original frame
-        output_frame = cv2.addWeighted(
-            frame,
-            1 - alpha,
-            overlay,
-            alpha,
-            0
-        )
+                        #     # Draw closed polyline
+                        #     cv2.polylines(
+                        #         vis_frame,
+                        #         [pts],
+                        #         isClosed=False,
+                        #         color=(0, 0, 255),   # Red
+                        #         thickness=2,
+                        #         lineType=cv2.LINE_AA
+                        #     )
 
+                        # ========== Visualize the points ============ 
+                        # cv2.namedWindow(
+                        #     "Average Corners",
+                        #     cv2.WINDOW_NORMAL
+                        # )
+
+                        # if upper_points is not None:
+                        #     for p in upper_points:
+                        #         cv2.circle(
+                        #             vis_frame,
+                        #             tuple(np.round(p).astype(int)),
+                        #             3,
+                        #             (0, 0, 255),   # Red
+                        #             -1
+                        #         )
+
+                        # if lower_points is not None:
+                        #     for p in lower_points:
+                        #         cv2.circle(
+                        #             vis_frame,
+                        #             tuple(np.round(p).astype(int)),
+                        #             3,
+                        #             (255, 0, 0),   # Blue
+                        #             -1
+                        #         )
+
+                        # cv2.imshow("Average Corners", vis_frame)
+
+                        # cv2.waitKey(0)
+                        # cv2.destroyAllWindows()
+                        
+                    # Add results to output video frame
+                    top_colors = [(0, 0, 255), (255, 0, 0)]
+                    bottom_colors = [(0, 255, 155), (255, 178, 0)]
+
+                    if obj_id == 1:
+                        colors = top_colors
+                    else:
+                        colors = bottom_colors
+
+                    # Add mask results
+                    mask_uint8 = clean_mask_result.astype(np.uint8)
+
+                    # Overlay the cleaned mask for that lip
+                    output_frame[mask_uint8 > 0] = (
+                        0.8 * output_frame[mask_uint8 > 0] +
+                        0.2 * np.array(colors[0])
+                    ).astype(np.uint8)
+
+                    # Add predicted SAM points
+                    if upper_points is not None:
+                        for p in upper_points:
+                            cv2.circle(
+                                output_frame,
+                                tuple(np.round(p).astype(int)),
+                                3,
+                                colors[0],   
+                                -1
+                            )
+
+                    if lower_points is not None:
+                        for p in lower_points:
+                            cv2.circle(
+                                output_frame,
+                                tuple(np.round(p).astype(int)),
+                                3,
+                                colors[1],   # Blue
+                                -1
+                            )
+                else:   # Tongue Mask
+                    raw_mask = raw_mask.squeeze()
+
+                    # Clean the raw sam2 mask to remove holes and noise
+                    clean_mask_result = mask_processor.clean_mask(raw_mask)
+
+                    # Convert bool mask to uint8
+                    mask_uint8 = clean_mask_result.astype(np.uint8)
+
+                    # Overlay the cleaned mask for that lip
+                    output_frame[mask_uint8 > 0] = (
+                        0.2 * output_frame[mask_uint8 > 0] +
+                        0.8 * np.array([0, 0, 0])
+                    ).astype(np.uint8)
+                
+                # Add the mediapipe landmarks for comparison
+                output_frame = mp_utils.add_lms_to_frame(output_frame, mp_lip_results_list[frame_idx], False)
+                
         # Convert RGB -> BGR
         output_frame_bgr = cv2.cvtColor(
             output_frame,
@@ -433,6 +584,7 @@ if args.sv == 1:
         )
 
         video_writer.write(output_frame_bgr)
+        
 
     # ====== Finalize ====== #
 

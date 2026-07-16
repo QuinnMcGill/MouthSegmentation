@@ -1,6 +1,110 @@
 import torch
 import torch.nn.functional as F
+from torch.utils.data import random_split
 
+
+from datasets.lapa_dataset import LaPaLipDataset
+from datasets.mayaFaces_dataset import MayaFacesDataset
+from datasets.hybrid_dataset import HybridDataset 
+
+from torch.utils.data import DataLoader
+
+def create_dataloaders(dataset_name, dataset_root, image_size, batch_size):
+    if dataset_name == "lapa":
+        train_dataset = LaPaLipDataset(
+            root_dir=dataset_root,
+            split="train",
+            image_size=image_size,
+            lip_corners=True,
+        )
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=4,
+            drop_last=False,
+        )
+
+        val_dataset = LaPaLipDataset(
+            root_dir=dataset_root,
+            split="val",
+            image_size=image_size,
+            lip_corners=True,
+        )
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+        )
+
+    elif dataset_name == "maya": 
+        maya_dataset = MayaFacesDataset(
+            root_dir=dataset_root,
+            transform=None
+        )
+
+        # Assume 80/20 split
+        train_size = int(0.8 * len(maya_dataset))
+        val_size = len(maya_dataset) - train_size
+
+        train_dataset, val_dataset = random_split(
+            maya_dataset,
+            [train_size, val_size],
+        )
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=4,
+        )
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=4
+        )
+
+    else:
+        lapa_root_dir = dataset_root[0]
+        maya_root_dir = dataset_root[1]
+
+        hybrid_dataset = HybridDataset(
+            lapa_root_dir,
+            maya_root_dir,
+            maya_split=0.3,
+            image_size=image_size,
+            transform=None,
+            landmarks=False, 
+        )
+
+        # Assume 80/20 split
+        train_size = int(0.8 * len(hybrid_dataset))
+        val_size = len(hybrid_dataset) - train_size
+
+        train_dataset, val_dataset = random_split(
+            hybrid_dataset,
+            [train_size, val_size],
+        )
+
+        train_loader = DataLoader(
+            dataset=train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True,
+            num_workers=4
+        )
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=4
+        )
+    
+    return train_loader, val_loader
 
 def soft_lip_corners(
     prob_masks: torch.Tensor,

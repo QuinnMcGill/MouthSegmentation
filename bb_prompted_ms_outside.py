@@ -34,12 +34,23 @@ import mask_processing.mask_processor as mask_processor
 # Parse the command line arguments
 parser = argparse.ArgumentParser(description='Mouth Part Segmentation Script')
 parser.add_argument('--v', '--video_filename', type=str, default='tc5.mp4', help='.mp4 filename of test video in mocapvids directory')
-parser.add_argument('--sc', '--sam_checkpoint', type=str, default='sam2.1_hiera_large.pt', help='Name of SAM checkpoint file')
-parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya" or "lapa")')
+parser.add_argument('--bm', '--base_model', type=str, default='s', help='SAM2.1 base model (options: s, b, l, t)')
+parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya", "lapa", or "hybrid")')
 parser.add_argument('--sv', '--save_video', type=int, default=0, help='Whether to save the output segmentation video (boolean)')
 parser.add_argument('--npp', '--num_prompts_per_part', type=int, default=4, help='Number of prompts to add for each mouth part (integer)')
+parser.add_argument('--cbb', '--create_bounding_boxes', type=int, default=0, help='Whether to create bounding boxes for each mouth part (1 or 0)')
 parser.add_argument('--fw', '--finetuned_weights', type=str, default=None, help="Name of weights file in finetuned_weights folder")
 args = parser.parse_args()
+
+# Initialize some configuration parameters
+base_model = "sam2.1" + args.bm
+dataset = args.d
+fw_idx = -1   
+# If the user would like to use finetuned weights, get the index of the finetuning results for these weights
+if args.fw is not None:
+    # Get the row index of the results for these finetuned weights
+    ft_res_df = pd.read_csv("finetuning_sam2/finetuning_results.csv")
+    fw_idx = ft_res_df.index[ft_res_df['finetuned_weights'] == 'finetuning_sam2/finetuned_weights/' + args.fw][0]
 
 # select the device for computation
 if torch.cuda.is_available():
@@ -66,44 +77,7 @@ elif device.type == "mps":
 
 # ====== Step 3: Load the SAM2 model ====== #
 
-sam2_checkpoint = os.path.join("external/sam2/checkpoints", args.sc)
-#sam2_checkpoint = "finetuned_weights/sam2_lapa_step_8000.pt"
-model_cfg = "configs/sam2.1/sam2.1_hiera_s.yaml"
-
-predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device.type) # Build the SAM2 model using pretrained weights
-
-# Load the fine-tuned model weights
-fw_idx = -1   # Only used if the user specifies the finetuned weights
-base_model = "sam2.1s"
-dataset = args.d
-
-if args.fw is not None:
-    # Get the row index of the results for these finetuned weights
-    ft_res_df = pd.read_csv("finetuning_sam2/finetuning_results.csv")
-    fw_idx = ft_res_df.index[ft_res_df['finetuned_weights'] == 'finetuning_sam2/finetuned_weights/' + args.fw][0]
-
-    # Get the model type
-    base_model = ft_res_df.loc[fw_idx, 'base_model']
-
-    # Get the dataset
-    dataset = ft_res_df.loc[fw_idx, 'dataset']
-
-    fw_checkpoint = torch.load(
-        f='finetuning_sam2/finetuned_weights/' + args.fw,
-        map_location=device,
-        weights_only=False
-    )
-
-    predictor.load_state_dict(
-        fw_checkpoint["model_state_dict"]
-    )
-
-    # state_dict = torch.load(
-    #     f"finetuned_weights/{args.fw}",
-    #     map_location=device,
-    #     weights_only=True
-    # )
-    # predictor.load_state_dict(state_dict)
+predictor = sam2_utils.initialize_sam2(args.bm, device, args.fw)
 
 # ====== Step 4: Load the video and perform segmentation ====== #
 
@@ -147,19 +121,39 @@ mouth_parts = {
 prompt_spacing = len(frame_names) // args.npp
 
 # ------ Upper Lip ------
-decent_ul_boxes = [[408, 840, 628, 882], [377, 700, 608, 860], [428, 782, 684, 846], [446, 777, 692, 824]]
+decent_ul_boxes = []
+decent_ul_boxes_4 = [[408, 840, 628, 882], [377, 700, 608, 860], [428, 782, 684, 846], [446, 777, 692, 824]]
+decent_ul_boxes_5 = [[412, 851, 621, 882], [432, 680, 684, 817], [463, 689, 695, 795], [457, 749, 684, 806], None]
+decent_ul_boxes_6 = [[412, 838, 621, 882], [474, 780, 632, 858], [519, 713, 737, 811], [443, 769, 668, 851], [448, 757, 690, 795], [477, 744, 681, 800]]
 
+if args.cbb == 0:   # Load the pre-made bounding boxes for the upper and bottom lips
+    if args.npp == 4:
+        decent_ul_boxes = decent_ul_boxes_4
+    elif args.npp == 5:
+        decent_ul_boxes = decent_ul_boxes_5
+    elif args.npp == 6:
+        decent_ul_boxes = decent_ul_boxes_6
+    else:
+        raise ValueError(f"Unsupported number of prompts per part: {args.npp}. Supported values are 4, 5, or 6.")
+
+print("---- Creating bounding box prompts for the upper lip ----")
 for prompt_idx in range(args.npp):
     ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
     ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
 
-    # Add positive and negative clicks
-    # box_ul = get_prompt_box(
-    #     frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    #     mouth_part="upper lip", color = mouth_parts[1]["color"]
-    # )
-
-    box_ul = decent_ul_boxes[prompt_idx]
+    # Create/Select the bounding box
+    if args.cbb == 1:
+        box_ul = sam2_utils.generate_prompt_box(
+            frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="upper lip", 
+            color = mouth_parts[1]["color"]
+        )
+        print("--> New ul box created: ", box_ul, '\n')
+    else:
+        if prompt_idx < len(decent_ul_boxes):
+            box_ul = decent_ul_boxes[prompt_idx]
+        else:
+            raise ValueError(f"Not enough pre-made bounding boxes for the upper lip. Requested {args.npp}, but only {len(decent_ul_boxes)} available.")
 
     # Add prompts and get predictions
     if box_ul is not None:
@@ -171,19 +165,39 @@ for prompt_idx in range(args.npp):
         )
 
 # ------ Bottom Lip ------
-decent_bl_boxes = [[406, 878, 626, 935], [392, 809, 583, 931], [414, 844, 708, 911], [434, 815, 704, 878]]
+decent_bl_boxes = []
+decent_bl_boxes_4 = [[406, 878, 626, 935], [392, 809, 583, 931], [414, 844, 708, 911], [434, 815, 704, 878]]
+decent_bl_boxes_5 = [[417, 886, 626, 931], [423, 824, 681, 962], [468, 780, 675, 842], None, [448, 820, 706, 886]]
+decent_bl_boxes_6 = [[417, 880, 630, 926], [486, 862, 626, 931], [539, 806, 746, 918], [423, 855, 712, 906], [450, 800, 699, 849], [470, 800, 695, 835]]
 
+if args.cbb == 0:   # Load the pre-made bounding boxes for the upper and bottom lips
+    if args.npp == 4:
+        decent_bl_boxes = decent_bl_boxes_4
+    elif args.npp == 5:
+        decent_bl_boxes = decent_bl_boxes_5
+    elif args.npp == 6:
+        decent_bl_boxes = decent_bl_boxes_6
+    else:
+        raise ValueError(f"Unsupported number of prompts per part: {args.npp}. Supported values are 4, 5, or 6.")
+
+print("---- Creating bounding box prompts for the bottom lip ----")
 for prompt_idx in range(args.npp):
     ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
     ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
 
-    # Add positive and negative clicks
-    # box_bl = get_prompt_box(
-    #     frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
-    #     mouth_part="bottom lip", color = mouth_parts[2]["color"]
-    # )
-
-    box_bl = decent_bl_boxes[prompt_idx]
+    # Create/Select the bounding box
+    if args.cbb == 1:
+        box_bl = sam2_utils.generate_prompt_box(
+            frame=np.array(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="bottom lip", 
+            color = mouth_parts[2]["color"]
+        )
+        print("--> New bl box created: ", box_bl, "\n")
+    else:
+        if prompt_idx < len(decent_bl_boxes):
+            box_bl = decent_bl_boxes[prompt_idx]
+        else:
+            raise ValueError(f"Not enough pre-made bounding boxes for the bottom lip. Requested {args.npp}, but only {len(decent_bl_boxes)} available.")
 
     if box_bl is not None:
         # Add prompts and get predictions
@@ -250,7 +264,7 @@ if args.sv == 1:
     height, width = first_frame.shape[:2]
 
     # Output video path
-    output_video_path = f"bb_seg_results/bb_{base_model}_{dataset}_fw{fw_idx}_{args.v}"
+    output_video_path = f"bb_seg_results/bb_{base_model}_{dataset}_fw{fw_idx}_{args.npp}pp_{args.v}"
 
     # Video writer
     fps = 30

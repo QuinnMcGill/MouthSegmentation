@@ -39,7 +39,7 @@ def get_largest_contour(mask):
 def contour_to_spline(
     contour,
     num_points=500,
-    smoothness=10
+    smoothness=15
 ):
     """
     Convert contour to smooth closed spline.
@@ -59,7 +59,8 @@ def contour_to_spline(
     u_new = np.linspace(
         0,
         1,
-        num_points
+        num_points,
+        endpoint=False
     )
 
     x_new, y_new = splev(
@@ -72,4 +73,3 @@ def contour_to_spline(
     )
 
     return spline
-

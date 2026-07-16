@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 import cv2
 import numpy as np
@@ -709,48 +710,48 @@ def visualize_lapa_vs_mp(image, lapa_landmarks):
     plt.show()
 
 # ------------ SCRIPT FOR TESTING DATASET ------------
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-import numpy as np
+# from torch.utils.data import DataLoader
+# import matplotlib.pyplot as plt
+# import numpy as np
 
-# from datasets.lapa_dataset import LaPaLipDataset
-dataset_path = "/home/quinnm/.cache/downloaded_datasets/LaPa"
+# # from datasets.lapa_dataset import LaPaLipDataset
+# dataset_path = "/home/quinnm/.cache/downloaded_datasets/LaPa"
 
-train_dataset = LaPaLipDataset(
-    root_dir=dataset_path,
-    split="train",
-    image_size=(512, 512),
-    landmarks=True,
-    lip_corners=True
-)
+# train_dataset = LaPaLipDataset(
+#     root_dir=dataset_path,
+#     split="train",
+#     image_size=(512, 512),
+#     landmarks=True,
+#     lip_corners=True
+# )
 
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=4,
-    shuffle=True,
-    num_workers=4,
-)
+# train_loader = DataLoader(
+#     train_dataset,
+#     batch_size=4,
+#     shuffle=True,
+#     num_workers=4,
+# )
 
-batch = next(iter(train_loader))
+# batch = next(iter(train_loader))
 
-print("Image shape:", batch["image"].shape)
-print("Mask shape:", batch["mask"].shape)
-print("Landmarks shape:", batch["landmarks"].shape)
+# print("Image shape:", batch["image"].shape)
+# print("Mask shape:", batch["mask"].shape)
+# print("Landmarks shape:", batch["landmarks"].shape)
 
-for _ in range(10):
+# for _ in range(10):
 
-    idx = np.random.randint(len(train_dataset))
+#     idx = np.random.randint(len(train_dataset))
 
-    sample = train_dataset[idx]
+#     sample = train_dataset[idx]
 
-    image = sample["image"].permute(1,2,0).numpy()
+#     image = sample["image"].permute(1,2,0).numpy()
 
-    lapa_landmarks = sample["landmarks"].numpy()
+#     lapa_landmarks = sample["landmarks"].numpy()
 
-    visualize_lapa_vs_mp(
-        image,
-        lapa_landmarks
-    )
+#     visualize_lapa_vs_mp(
+#         image,
+#         lapa_landmarks
+#     )
 
 
 # # # --------------------------------------------------

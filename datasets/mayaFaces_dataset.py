@@ -142,7 +142,6 @@ class MayaFacesDataset(Dataset):
             "mask": mask,
         }
     
-print("Loaded MayaFaces Dataset")
 # ------------ SCRIPT FOR TESTING DATASET ------------
 # from torch.utils.data import DataLoader
 # import matplotlib.pyplot as plt

@@ -16,7 +16,7 @@ def mask_to_spline(mask):
 
 def clean_mask(mask,
                close_kernel_size=5,
-               open_kernel_size=3):
+               open_kernel_size=4):
     """
     Clean a binary lip mask.
 
@@ -59,15 +59,16 @@ def clean_mask(mask,
         connectivity=8
     )
 
-    if num_labels > 1:
+    if num_labels > 1:  # More than just background
 
         largest_label = 1 + np.argmax(
             stats[1:, cv2.CC_STAT_AREA]
         )
 
-        mask = (labels == largest_label).astype(np.uint8)
+        mask = (labels == largest_label).astype(np.uint8)   # keep only the largest connected component
 
     return mask.astype(bool)
+
 
 def process_video_segments(video_segments):
     """
@@ -248,3 +249,52 @@ def visualize_mask_cleanup(
 
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+
+def visualize_spline(
+    frame,
+    spline,
+):
+    """
+    Draw a smooth spline on top of an image.
+
+    Args:
+        image : RGB or BGR image
+        spline : (N,2) array returned by mask_to_spline()
+    """
+
+    if spline is None:
+        return
+
+    # Covert frame to BGR for visualization
+    frame = cv2.cvtColor(
+        frame,
+        cv2.COLOR_RGB2BGR
+    )
+
+    vis = frame.copy()
+
+    # Convert spline coordinates to integer pixels
+    pts = np.round(spline).astype(np.int32)
+
+    # Draw closed polyline
+    cv2.polylines(
+        vis,
+        [pts],
+        isClosed=True,
+        color=(255, 255, 0),   # Cyan (BGR)
+        thickness=2,
+        lineType=cv2.LINE_AA
+    )
+
+    cv2.namedWindow(
+        "Lip Spline",
+        cv2.WINDOW_NORMAL
+    )
+
+    cv2.imshow("Lip Spline", vis)
+
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+

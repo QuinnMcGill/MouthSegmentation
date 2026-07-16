@@ -4,6 +4,7 @@ import os
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from typing import Optional
 
 # SAM2
 from sam2.build_sam import build_sam2_video_predictor           #type:ignore   
@@ -188,8 +189,6 @@ def generate_prompt_box(frame, mouth_part, color):
     return np.array(bbox[0], dtype=np.float32)
 
 def generate_prompt_points(frame, mouth_part):
-    points = []
-    labels = []
 
     print(
         f"Please select prompt points for {mouth_part}.\n"
@@ -197,70 +196,114 @@ def generate_prompt_points(frame, mouth_part):
         "  - Left click to choose a location\n"
         "  - Press 'p' for a positive point\n"
         "  - Press 'n' for a negative point\n"
+        "  - Press 'r' to redraw\n"
         "  - Press ESC when finished\n"
     )
 
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(frame)
-    ax.set_title(f"Select prompt points for {mouth_part}")
+    ax.set_title(f"Prompt Points: {mouth_part}")
 
-    current_point = [None]
+    current_point: list[Optional[tuple[int, int]]] = [None]
 
-    # -----------------------------
+    points = []
+    labels = []
+
+    point_artists = []
+
+    # ---------------------------------
     # Mouse click event
-    # -----------------------------
+    # ---------------------------------
     def onclick(event):
+
         if event.inaxes != ax:
             return
 
         x = int(event.xdata)
         y = int(event.ydata)
 
-        current_point[0] = (x, y)   #type: ignore
+        current_point[0] = (x, y)
 
-        print(f"Selected point: ({x}, {y})")
-        print("Press 'p' for positive or 'n' for negative")
+        print(f"Selected ({x}, {y})")
+        print("Press 'p' or 'n'.")
 
-    # -----------------------------
+    # ---------------------------------
     # Keyboard event
-    # -----------------------------
+    # ---------------------------------
     def onkey(event):
+
+        # Finish
         if event.key == "escape":
             plt.close(fig)
+            return
+
+        # Restart
+        elif event.key == "r":
+
+            points.clear()
+            labels.clear()
+            current_point[0] = None
+
+            for artist in point_artists:
+                artist.remove()
+
+            point_artists.clear()
+
+            fig.canvas.draw()
+
+            print("All prompt points cleared.")
+
             return
 
         if current_point[0] is None:
             return
 
-        x, y = current_point[0]     #type: ignore
+        x, y = current_point[0]
 
-        # Positive point
         if event.key == "p":
+
             points.append([x, y])
             labels.append(1)
 
-            ax.scatter(x, y, c='green', marker='o', s=100)
+            artist = ax.scatter(
+                x,
+                y,
+                c="lime",
+                marker="o",
+                s=80,
+            )
+
+            point_artists.append(artist)
+
             fig.canvas.draw()
 
-            print(f"Added POSITIVE point at ({x}, {y})")
+            print(f"Added POSITIVE point ({x}, {y})")
 
             current_point[0] = None
 
-        # Negative point
         elif event.key == "n":
+
             points.append([x, y])
             labels.append(0)
 
-            ax.scatter(x, y, c='red', marker='x', s=100)
+            artist = ax.scatter(
+                x,
+                y,
+                c="red",
+                marker="x",
+                s=80,
+            )
+
+            point_artists.append(artist)
+
             fig.canvas.draw()
 
-            print(f"Added NEGATIVE point at ({x}, {y})")
+            print(f"Added NEGATIVE point ({x}, {y})")
 
             current_point[0] = None
 
-    # Connect callbacks
-    fig.canvas.mpl_connect('button_press_event', onclick)
-    fig.canvas.mpl_connect('key_press_event', onkey)
+    fig.canvas.mpl_connect("button_press_event", onclick)
+    fig.canvas.mpl_connect("key_press_event", onkey)
 
     plt.show()
 

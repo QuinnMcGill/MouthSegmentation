@@ -77,13 +77,15 @@ while cap.isOpened():
 
     # ==== Visualize the tracking ==== #
     # ---- Landmarks and mesh ---- #
-    annotated_image = mph.draw_lip_contour_landmarks(mp_image.numpy_view(), result)
+    annotated_image = mph.draw_landmarks_on_image(mp_image.numpy_view(), result)
     annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
 
-    if frame_idx == 30:     # Random frame choice for sanity check
-        mph.print_lip_landmark_coordinates(result)
-
     cv2.imshow("MediaPipe Facial Motion Capture", annotated_image)
+
+    key = cv2.waitKey(1)
+    if key == 27:      # ESC to quit
+        break
+    
     video_writer.write(annotated_image)
 
     frame_idx += 1

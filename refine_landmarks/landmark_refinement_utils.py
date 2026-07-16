@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 
 UPPER_LIP_OBJ_ID = 1
@@ -68,10 +69,6 @@ def refine_landmarks(
     return refined
 
 # ======= Visualization Utils ======= #
-
-import cv2
-import numpy as np
-
 
 def visualize_mp_sam_frame(
     frame,
