@@ -42,10 +42,14 @@ class HybridDataset(Dataset):
         self.transform = transform
         self.landmarks = landmarks
 
-        self.lapa_image_paths = self.build_lapa_paths()
-        self.maya_samples = self.build_maya_samples()
-        self.lapa_samples = self.build_lapa_samples()
+        self.maya_lip_corner_ids = [61, 291, 78, 308]
+        self.lapa_lip_corner_ids = [84, 90, 96, 100]
+        self.maya_meaningful_lm_ids = [37, 0, 267, 17, 13, 14]
+        self.lapa_meaningful_lm_ids = [86, 87, 88, 93, 98, 102]
 
+        self.lapa_image_paths = self.build_lapa_paths()
+        self.maya_samples = self.build_maya_samples2()
+        self.lapa_samples = self.build_lapa_samples()
         self.all_samples = self.maya_samples + self.lapa_samples
 
     def build_lapa_paths(self):
@@ -58,7 +62,7 @@ class HybridDataset(Dataset):
 
         return sorted(image_paths)
     
-    def build_maya_samples(self):
+    def build_maya_samples2(self):
         """
         Create all the samples from the MayaFaces dataset. Since this is a much smaller dataset,
         all samples should be used. The parameter "maya_split" controls the percentage of the 
@@ -67,122 +71,167 @@ class HybridDataset(Dataset):
 
         samples = []
         image_dir = self.maya_root_dir / "images"
-        ul_dir = self.maya_root_dir / "ul_masks"
-        ll_dir = self.maya_root_dir / "ll_masks"
-        lm_dir = self.maya_root_dir / "landmarks"
 
-        inner_lm_colors = self.maya_root_dir / "landmark_colors_inner.txt"
-        outer_lm_colors = self.maya_root_dir / "landmark_colors_outer.txt"
+        landmark_dir = self.maya_root_dir / "landmark_txt"
 
-        if self.landmarks is True:
-            inner_color_dict = self.load_landmark_colors(inner_lm_colors)
-            outer_color_dict = self.load_landmark_colors(outer_lm_colors)
+        required_landmark_ids = set(
+            self.maya_lip_corner_ids + self.maya_meaningful_lm_ids
+        )
 
         for img_file in sorted(image_dir.glob("img_*.png")):
 
             img_id = img_file.stem.split("_")[-1]
 
-            ul_file = ul_dir / f"ul_{img_id}.png"
-            ll_file = ll_dir / f"ll_{img_id}.png"
-            inner_lm_file = lm_dir / f"inner_lm_{img_id}.png"
-            outer_lm_file = lm_dir / f"inner_lm_{img_id}.png"
+            ul_mask_path = self.maya_root_dir / "ul_masks" / f"ul_{img_id}.png"
+            ll_mask_path = self.maya_root_dir / "ll_masks" / f"ll_{img_id}.png"
+
+            lm_path = str(landmark_dir) + "/landmarks_" + img_id + ".txt"
 
             # -------------------------------------------------
-            # Load Image and Convert to RGB
+            # Check for UL and LL masks
             # -------------------------------------------------
 
-            # image = cv2.imread(img_file)
-
-            # if image is None:
-            #     raise RuntimeError(f"Failed to load image: {image}")
-            
-            # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-            # -------------------------------------------------
-            # Check for UL, LL, and Landmarks
-            # -------------------------------------------------
-
-            if not ul_file.exists() or not ll_file.exists():
+            if not ul_mask_path.exists() or not ll_mask_path.exists():
                 continue
 
-            if self.landmarks is True and (not inner_lm_file.exists() or not outer_lm_file.exists()):
-                continue
+            # -------------------------------------------------
+            # Check landmark files
+            # -------------------------------------------------
 
-            # --------------------------------------------------
-            # Load masks
-            # --------------------------------------------------
+            if self.landmarks:
 
-            ul_mask = cv2.imread(
-                ul_file,
-                cv2.IMREAD_GRAYSCALE,
-            )
+                if not Path(lm_path).exists():
+                    continue
 
-            ll_mask = cv2.imread(
-                ll_file,
-                cv2.IMREAD_GRAYSCALE,
-            )
+                found_landmark_ids = set()
 
-            if ul_mask is None:
-                raise RuntimeError(f"Failed to load image: {ul_file}")
+                with open(lm_path, "r") as f:
 
-            if ll_mask is None:
-                raise RuntimeError(f"Failed to load image: {ll_file}")
-            
-            # convert to binary masks
-            ul_mask = (ul_mask > 127).astype(np.float32)
-            ll_mask = (ll_mask > 127).astype(np.float32)
+                    next(f)  # Skip header
 
-            # --------------------------------------------------
-            # Apply transforms
-            # --------------------------------------------------
+                    for line in f:
+                        line = line.strip()
 
-            # if self.transform is not None:
+                        if not line:
+                            continue
 
-            #     transformed = self.transform(
-            #         image=image,
-            #         masks=[ul_mask, ll_mask],
-            #     )
+                        landmark_id = int(
+                            line.split(",")[0]
+                        )
 
-            #     image = transformed["image"]
+                        found_landmark_ids.add(
+                            landmark_id
+                        )
 
-            #     ul_mask = transformed["masks"][0]
-            #     ll_mask = transformed["masks"][1]
-
-            # --------------------------------------------------
-            # Convert to tensors
-            # --------------------------------------------------
-
-            # image = (
-            #     torch.from_numpy(image)
-            #     .permute(2, 0, 1)
-            #     .float()
-            #     / 255.0
-            # )
-
-            mask = np.stack(
-                [
-                    ul_mask,
-                    ll_mask,
-                ],
-                axis=0,
-            ).astype(np.float32)
+                # Skip sample if any required landmark is missing
+                if not required_landmark_ids.issubset(found_landmark_ids):
+                    continue
 
             # --------------------------------------------------
             # Create a sample
             # --------------------------------------------------
+
             sample = {
                 "image": img_file,
-                "mask": mask
+                "mask_path": self.maya_root_dir
             }
 
-            # if self.landmarks is True:
-            #     inner_landmarks = self.find_landmarks(inner_lm_file, inner_color_dict)
-            #     outer_landmarks = self.find_landmarks(outer_lm_file, outer_color_dict)
-            #     # TODO: Add landmarks to sample
+            if self.landmarks is True:
+                sample["lm_path"] = Path(lm_path)
 
             samples.append(sample)
-
+        
         return samples
+    
+    # def build_maya_samples(self):
+    #     """
+    #     Create all the samples from the MayaFaces dataset. Since this is a much smaller dataset,
+    #     all samples should be used. The parameter "maya_split" controls the percentage of the 
+    #     final dataset which these samples account for.
+    #     """
+
+    #     samples = []
+    #     image_dir = self.maya_root_dir / "images"
+
+    #     inner_lm_colors = self.maya_root_dir / "landmark_colors_inner.txt"
+    #     outer_lm_colors = self.maya_root_dir / "landmark_colors_outer.txt"
+
+    #     if self.landmarks is True:
+    #         self.inner_color_dict = self.load_landmark_colors(inner_lm_colors)
+    #         self.outer_color_dict = self.load_landmark_colors(outer_lm_colors)
+
+    #     for img_file in sorted(image_dir.glob("img_*.png")):
+
+    #         img_id = img_file.stem.split("_")[-1]
+
+    #         ul_mask_path = self.maya_root_dir / "ul_masks" / f"ul_{img_id}.png"
+    #         ll_mask_path = self.maya_root_dir / "ll_masks" / f"ll_{img_id}.png"
+
+    #         inner_lm_file = self.maya_root_dir / "landmarks" / f"inner_lm_{img_id}.png"
+    #         outer_lm_file = self.maya_root_dir / "landmarks" / f"outer_lm_{img_id}.png"
+
+    #         # -------------------------------------------------
+    #         # Check for UL and LL masks
+    #         # -------------------------------------------------
+
+    #         if not ul_mask_path.exists() or not ll_mask_path.exists():
+    #             continue
+
+    #         # -------------------------------------------------
+    #         # Check landmark files
+    #         # -------------------------------------------------
+
+    #         if self.landmarks:
+
+    #             if (
+    #                 not inner_lm_file.exists()
+    #                 or not outer_lm_file.exists()
+    #             ):
+    #                 print(
+    #                     f"Skipping {img_file.name}: "
+    #                     f"missing landmark image"
+    #                 )
+    #                 continue
+
+    #             # Find landmarks
+    #             inner_landmarks = self.find_landmarks(
+    #                 inner_lm_file,
+    #                 self.inner_color_dict
+    #             )
+
+    #             outer_landmarks = self.find_landmarks(
+    #                 outer_lm_file,
+    #                 self.outer_color_dict
+    #             )
+
+    #             landmarks = (
+    #                 inner_landmarks
+    #                 | outer_landmarks
+    #             )
+
+    #             if len(landmarks) < (len(self.maya_lip_corner_ids) + len(self.maya_meaningful_lm_ids)):
+    #                 # print(
+    #                 #     f"Skipping {img_file.name}: "
+    #                 #     f"incomplete landmarks. Found {len(landmarks)} but expected "
+    #                 #     f"{len(self.maya_lip_corner_ids) + len(self.maya_meaningful_lm_ids)}."
+    #                 # )
+    #                 continue
+
+    #         # --------------------------------------------------
+    #         # Create a sample
+    #         # --------------------------------------------------
+
+    #         sample = {
+    #             "image": img_file,
+    #             "mask_path": self.maya_root_dir
+    #         }
+
+    #         if self.landmarks is True:
+    #             sample["lm_path"] = self.maya_root_dir
+
+    #         samples.append(sample)
+
+    #     return samples
 
     def load_landmark_colors(self, txt_file): 
         """ 
@@ -200,34 +249,70 @@ class HybridDataset(Dataset):
 
         return color_dict 
         
-    def find_landmarks(self, image, color_dict, tol=3): 
-        """ 
-        Parameters 
-        ---------- 
-            image : ndarray RGB or RGBA image 
-            color_dict : dict landmark_id -> (R,G,B) 
+    def find_landmarks(self, image_path, color_dict, tol=3):
+        """
+        Find landmark locations in a color-coded landmark image.
 
-        Returns 
-        ------- 
-            dict landmark_id -> (x,y) centroid 
-        """ 
-        # Ignore alpha channel if present 
-        rgb = image[:, :, :3] 
-        landmarks = {} 
+        Parameters
+        ----------
+        image_path : Path
+            Path to the landmark image.
+        color_dict : dict
+            Dictionary mapping landmark IDs to RGB colors.
+        tol : int
+            Color matching tolerance.
 
-        for landmark_id, color in color_dict.items(): 
-            color = np.array(color, dtype=np.int16) # Match pixels whose R,G,B values are all within +/- tol 
-            mask = np.all( np.abs(rgb - color) <= tol, axis=2 ) 
-            ys, xs = np.where(mask) 
+        Returns
+        -------
+        dict
+            Dictionary mapping landmark IDs to (x, y) coordinates.
+        """
+
+        image_path = Path(image_path)
+
+        if not image_path.exists():
+            raise FileNotFoundError(
+                f"Missing landmark image: {image_path}"
+            )
+
+        image = cv2.imread(str(image_path))
+
+        if image is None:
+            raise RuntimeError(
+                f"Failed to load landmark image: {image_path}"
+            )
+
+        image = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2RGB
+        )
+
+        rgb = image[:, :, :3]
+
+        landmarks = {}
+
+        for landmark_id, color in color_dict.items():
+
+            color = np.array(
+                color,
+                dtype=np.int16
+            )
+
+            mask = np.all(
+                np.abs(rgb.astype(np.int16) - color) <= tol,
+                axis=2
+            )
+
+            ys, xs = np.where(mask)
 
             if len(xs) == 0:
-                landmarks[landmark_id] = None 
-                continue 
-            
-            x = round(xs.mean()) 
-            y = round(ys.mean()) 
-            landmarks[landmark_id] = (x, y) 
-            
+                continue
+
+            x = round(xs.mean())
+            y = round(ys.mean())
+
+            landmarks[landmark_id] = (x, y)
+
         return landmarks
     
     def build_lapa_samples(self):
@@ -242,66 +327,27 @@ class HybridDataset(Dataset):
             img_path = self.lapa_image_paths[idx]
 
             img_stem = img_path.stem
-            label_dir = str(img_path).split("images")[0] + '/labels/'
+            mask_dir = str(img_path).split("images")[0] + '/labels/'
             landmarks_dir = str(img_path).split("images")[0] + '/landmarks/'
 
-            label_path = label_dir + img_stem + ".png"
+            mask_path = mask_dir + img_stem + ".png"
             lm_path = landmarks_dir + img_stem + ".txt"
-
-            # -------------------------------------------------
-            # Load Image and Convert to RGB
-            # -------------------------------------------------
-
-            # image = cv2.imread(img_path)
-
-            # if image is None:
-            #     raise RuntimeError(f"Failed to load image: {image}")
-            
-            # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-            # -----------------------------
-            # Load segmentation mask
-            # -----------------------------
-            label = cv2.imread(str(label_path), cv2.IMREAD_UNCHANGED)
-
-            if label is None:
-                raise RuntimeError(f"Failed to load label: {label_path}")
-
-            # -----------------------------
-            # Create binary masks
-            # -----------------------------
-            ul_mask = (label == 7).astype(np.float32)
-            ll_mask = (label == 9).astype(np.float32)
-
-            # --------------------------------------------------
-            # Convert to tensors
-            # --------------------------------------------------
-
-            # image = (
-            #     torch.from_numpy(image)
-            #     .permute(2, 0, 1)
-            #     .float()
-            #     / 255.0
-            # )
-
-            mask = np.stack(
-                [
-                    ul_mask,
-                    ll_mask,
-                ],
-                axis=0,
-            ).astype(np.float32)
 
             # --------------------------------------------------
             # Create a sample
             # --------------------------------------------------
             sample = {
                 "image": img_path,
-                "mask": mask
+                "mask_path": mask_path
             }
 
-            # if self.landmarks is True:
-            #     # TODO: Add landmarks to sample
+            if self.landmarks is True:
+                if not Path(lm_path).exists():
+                    raise FileNotFoundError(
+                        f"Missing landmarks: {lm_path}"
+                    )
+                else:
+                    sample["lm_path"] = lm_path
 
             samples.append(sample)
     
@@ -322,10 +368,158 @@ class HybridDataset(Dataset):
             )
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        orig_h, orig_w = image.shape[:2]
 
-        # Mask is already a numpy array (2,H,W)
-        mask = sample["mask"].copy()
+        # --------------------------------------------------
+        # Load the mask images
+        # --------------------------------------------------
 
+        if sample["mask_path"] == self.maya_root_dir:   # This is a Maya sample, load the masks from the Maya dataset
+
+            img_id = sample['image'].stem.split("_")[-1]
+
+            # Load Maya masks
+            ul_mask_path = self.maya_root_dir / "ul_masks" / f"ul_{img_id}.png"
+            ll_mask_path = self.maya_root_dir / "ll_masks" / f"ll_{img_id}.png"
+
+            ul_mask = cv2.imread(str(ul_mask_path), cv2.IMREAD_GRAYSCALE)
+            ll_mask = cv2.imread(str(ll_mask_path), cv2.IMREAD_GRAYSCALE)
+
+            if ul_mask is None:
+                raise RuntimeError(f"Failed to load upper lip mask: {ul_mask_path}")
+
+            if ll_mask is None:
+                raise RuntimeError(f"Failed to load lower lip mask: {ll_mask_path}")
+
+            # Convert to binary masks
+            ul_mask = (ul_mask > 127).astype(np.float32)
+            ll_mask = (ll_mask > 127).astype(np.float32)
+
+            mask = np.stack([ul_mask, ll_mask], axis=0)
+
+        else:   # This is a LaPa sample, load the masks from the LaPa dataset
+
+            mask = cv2.imread(str(sample["mask_path"]), cv2.IMREAD_UNCHANGED)
+
+            if mask is None:
+                raise RuntimeError(f"Failed to load label: {str(sample["mask_path"])}")
+
+            # Create binary masks of upper lip and lower lip
+            ul_mask = (mask == 7).astype(np.float32)
+            ll_mask = (mask == 9).astype(np.float32)
+
+            mask = np.stack([ul_mask,ll_mask], axis=0,)
+
+        # --------------------------------------------------
+        # Load the mouth landmarks
+        # --------------------------------------------------
+        landmarks = None
+        lip_corners = None
+        meaningful_landmarks = None
+
+        if self.landmarks is True: 
+
+            if sample["mask_path"] == self.maya_root_dir:     # This is a Maya sample, load the landmarks from two separate landmark images
+                with open(sample["lm_path"], "r") as f:
+                    lines = [line.strip() for line in f.readlines()]
+
+                landmarks = {}
+
+                # Skip header
+                for line in lines[1:]:
+
+                    if not line:
+                        continue
+
+                    landmark_id, x, y = line.split(",")
+
+                    landmarks[int(landmark_id)] = [
+                        float(x),
+                        float(y)
+                    ]
+                
+                lip_corners = np.array(
+                    [
+                        landmarks[landmark_id]
+                        for landmark_id in self.maya_lip_corner_ids
+                    ],
+                    dtype=np.float32
+                )
+
+                meaningful_landmarks = np.array(
+                    [
+                        landmarks[landmark_id]
+                        for landmark_id in self.maya_meaningful_lm_ids
+                    ],
+                    dtype=np.float32
+                )
+
+                # Normalize landmark coordinates to [0, 1] range based on original image dimensions
+                lip_corners[:,0] = lip_corners[:,0] / (orig_w - 1)
+                lip_corners[:,1] = lip_corners[:,1] / (orig_h - 1)
+                meaningful_landmarks[:,0] = meaningful_landmarks[:,0] / (orig_w - 1)
+                meaningful_landmarks[:,1] = meaningful_landmarks[:,1] / (orig_h - 1)
+
+                print("\nIdx: ", idx, ", Type: MAYA")
+                print("lip_corner for idx ", idx, lip_corners)
+                print("meaningful_landmarks for idx ", idx, meaningful_landmarks)
+
+            else:   # This is a LaPa sample, load the landmarks directly from the .txt file
+                mouth_landmark_ids = list(range(84, 104))
+
+                with open(sample["lm_path"], "r") as f:
+                    lines = [line.strip() for line in f.readlines()]
+
+                landmarks = []
+
+                for landmark_id in mouth_landmark_ids:
+                    line = lines[landmark_id + 1]
+
+                    x, y = map(float, line.split())
+
+                    landmarks.append([x, y])
+
+                landmarks = np.array(
+                    landmarks,
+                    dtype=np.float32
+                )
+
+                if len(landmarks) != len(mouth_landmark_ids):
+                    raise RuntimeError(
+                        f"Expected {len(mouth_landmark_ids)} landmarks but "
+                        f"found {len(landmarks)} in {sample["lm_path"]}"
+                    )
+
+                lip_corners = np.array(
+                    [
+                        landmarks[
+                            landmark_id - 84
+                        ]
+                        for landmark_id in self.lapa_lip_corner_ids
+                    ],
+                    dtype=np.float32
+                )
+
+                meaningful_landmarks = np.array(
+                    [
+                        landmarks[
+                            landmark_id - 84
+                        ]
+                        for landmark_id in self.lapa_meaningful_lm_ids
+                    ],
+                    dtype=np.float32
+                )
+
+                # Normalize landmark coordinates to [0, 1] range based on original image dimensions
+                lip_corners[:,0] = lip_corners[:,0] / (orig_w - 1)
+                lip_corners[:,1] = lip_corners[:,1] / (orig_h - 1)
+                meaningful_landmarks[:,0] = meaningful_landmarks[:,0] / (orig_w - 1)
+                meaningful_landmarks[:,1] = meaningful_landmarks[:,1] / (orig_h - 1)
+
+                print("\nIdx: ", idx, ", Type: LAPA")
+                print("lip_corner for idx ", idx, lip_corners)
+                print("meaningful_landmarks for idx ", idx, meaningful_landmarks)
+                    
         # -----------------------------
         # Resize if needed
         # -----------------------------
@@ -353,6 +547,20 @@ class HybridDataset(Dataset):
                     ],
                     axis=0,
                 )
+
+                # if meaningful_landmarks is not None:
+                #     sx = w/orig_w
+                #     sy = h/orig_h
+
+                #     meaningful_landmarks[:, 0] *= sx
+                #     meaningful_landmarks[:, 1] *= sy
+
+                # if lip_corners is not None:
+                #     sx = w/orig_w
+                #     sy = h/orig_h
+
+                #     lip_corners[:, 0] *= sx
+                #     lip_corners[:, 1] *= sy
         
         # --------------------------------------------------
         # Apply transforms
@@ -383,41 +591,54 @@ class HybridDataset(Dataset):
 
         mask = torch.from_numpy(mask).float()
 
-        return {
+        instance = {
             "image": image,
             "mask": mask,
         } 
+
+
+        if self.landmarks is True:
+            if (lip_corners is not None) and (meaningful_landmarks is not None):
+                lip_corners = torch.from_numpy(lip_corners).float()
+                meaningful_landmarks = torch.from_numpy(meaningful_landmarks).float()
+                instance["lip_corners"] = lip_corners
+                instance["meaningful_landmarks"] = meaningful_landmarks
+
+        return instance
+
 
     def __len__(self):
         return len(self.all_samples)   
     
 # ------------ SCRIPT FOR TESTING DATASET ------------
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-import numpy as np
+# from torch.utils.data import DataLoader
+# import matplotlib.pyplot as plt
+# import numpy as np
 
-lapa_root_dir = "/home/quinnm/.cache/downloaded_datasets/LaPa"
-maya_root_dir = "datasets/MayaFaces"
+# lapa_root_dir = "/home/quinnm/.cache/downloaded_datasets/LaPa"
+# maya_root_dir = "datasets/MayaFaces"
 
-hybrid_dataset = HybridDataset(
-    lapa_root_dir,
-    maya_root_dir,
-    maya_split=0.5,
-    image_size=(1024, 1024),
-    transform=None,
-    landmarks=False, 
-)
+# image_size = (1024, 1024)
 
-train_loader = DataLoader(dataset=hybrid_dataset, batch_size=16, shuffle=True)
+# hybrid_dataset = HybridDataset(
+#     lapa_root_dir,
+#     maya_root_dir,
+#     maya_split=0.3,
+#     image_size=image_size,
+#     transform=None,
+#     landmarks=True, 
+# )
 
-print("Length of dataloader: ", len(train_loader))
-print("Length of dataset: ", len(hybrid_dataset))
+# train_loader = DataLoader(dataset=hybrid_dataset, batch_size=8, shuffle=True)
 
-batch = next(iter(train_loader))
+# print("Length of dataloader: ", len(train_loader))
+# print("Length of dataset: ", len(hybrid_dataset))
 
-print("---- First Batch ----")
-print("Image shape:", batch["image"].shape)
-print("Mask shape:", batch["mask"].shape)
+# batch = next(iter(train_loader))
+
+# print("---- First Batch ----")
+# print("Image shape:", batch["image"].shape)
+# print("Mask shape:", batch["mask"].shape)
 
 # # # --------------------------------------------------
 # # # Visualize first sample in batch
@@ -426,6 +647,21 @@ print("Mask shape:", batch["mask"].shape)
 # for idx in range(batch["image"].shape[0]):
 #     # CHW -> HWC
 #     image = batch["image"][idx].permute(1, 2, 0).numpy()
+#     h, w = image.shape[:2]
+
+#     # Get landmarks if available
+#     lip_corners = None
+#     meaningful_landmarks = None
+#     if batch.get("lip_corners") is not None and batch.get("meaningful_landmarks") is not None:
+#         lip_corners = (
+#             batch["lip_corners"][idx]
+#             .numpy()
+#         )
+
+#         meaningful_landmarks = (
+#             batch["meaningful_landmarks"][idx]
+#             .numpy()
+#         )
 
 #     # [2, H, W]
 #     mask = batch["mask"][idx].numpy()
@@ -466,8 +702,8 @@ print("Mask shape:", batch["mask"].shape)
 
 #     fig, ax = plt.subplots(
 #         1,
-#         3,
-#         figsize=(15, 5)
+#         4,
+#         figsize=(20, 5)
 #     )
 
 #     ax[0].imshow(image)
@@ -483,6 +719,35 @@ print("Mask shape:", batch["mask"].shape)
 #     ax[2].imshow(overlay)
 #     ax[2].set_title("Overlay")
 #     ax[2].axis("off")
+
+#     ax[3].imshow(image)
+#     ax[3].axis("off")
+
+#     if lip_corners is not None and meaningful_landmarks is not None:
+
+#         # Lip corners
+#         ax[3].scatter(
+#             lip_corners[:, 0] * w,
+#             lip_corners[:, 1] * h,
+#             s=50,
+#             marker="o",
+#             label="Lip Corners"
+#         )
+
+#         # Meaningful landmarks
+#         ax[3].scatter(
+#             meaningful_landmarks[:, 0] * w,
+#             meaningful_landmarks[:, 1] * h,
+#             s=50,
+#             marker="x",
+#             label="Meaningful Landmarks"
+#         )
+
+#         ax[3].set_title(
+#             "Lip Landmarks"
+#         )
+
+#         ax[3].legend()
 
 #     plt.tight_layout()
 #     plt.show()

@@ -10,6 +10,7 @@ from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.vision import drawing_utils
 from mediapipe.tasks.python.vision import drawing_styles
 
+from mediapipe.tasks.python.components.containers import NormalizedLandmark
 
 # Constants from mediapipe docs
 
@@ -39,12 +40,12 @@ INNER_RIGHT_CORNER = 308
 INNER_TOP_MIDDLE = 13
 INNER_BOTTOM_MIDDLE = 14
 
-# Mapping MediaPipe Landmarks to lip contours
+# Medapipe landmark indices along lip contours
 MEDIAPIPE_MOUTH_LAYOUT = {
-    "upper_outer": [61,185,40,39,37,0,267,269,270,409,291],
-    "upper_inner": [78,191,80,81,82,13,312,311,310,415,308],
-    "lower_outer": [61,146,91,181,84,17,314,405,321,375,291],
-    "lower_inner": [78,95,88,178,87,14,317,402,318,324,308]
+    "top_outer": [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291],           # Left outer corner to right outer corner (includes corners)
+    "top_inner": [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308],          # Left inner corner to left inner corner (includes corners)
+    "bottom_inner": [324, 318, 402, 317, 14, 87, 178, 88, 95],                # Right inner corner to left inner corner (excludes corners)
+    "bottom_outer": [375, 321, 405, 314, 17, 84, 181, 91, 146]                # Right outer corner to left outer corner (excludes corners)
 }
 
 # For Visualization
@@ -116,6 +117,178 @@ def isolate_lip_landmarks(mp_results_list):
 
     return mp_lip_results_list
 
+def replace_mp_lip_landmarks(mp_landmarks, lip_id, upper_points, lower_points, h, w):
+    """
+    Replace MediaPipe lip landmark x,y coordinates with
+    SAM2-derived landmark coordinates.
+
+    Parameters
+    ----------
+    mp_landmarks : list of NormalizedLandmark
+        MediaPipe landmarks for a given frame (assuming one face/frame).
+
+    lip_id : int
+        1 = upper lip
+        2 = lower lip
+
+    upper_points : ndarray, shape (N, 2)
+        SAM2-derived points along the upper arc of the
+        selected lip region, in pixel coordinates [x, y].
+
+    lower_points : ndarray, shape (N, 2)
+        SAM2-derived points along the lower arc of the
+        selected lip region, in pixel coordinates [x, y].
+
+    h : int
+        Image height in pixels.
+
+    w : int
+        Image width in pixels.
+
+    Returns
+    -------
+    updated_landmarks : list of NormalizedLandmark
+        MediaPipe landmarks with selected lip landmark
+        coordinates replaced by SAM2-derived coordinates.
+    """
+
+    # --------------------------------------------------
+    # SIMPLIFICATION: if no SAM2 mask is found, collapse
+    # the lip to the inner contour.
+    # --------------------------------------------------
+
+    if upper_points is None or lower_points is None:
+
+        if lip_id == 1:
+            # Upper lip is folded inward.
+            # Collapse upper outer contour onto upper inner contour.
+
+            inner_indices = MEDIAPIPE_MOUTH_LAYOUT["top_inner"]
+            outer_indices = MEDIAPIPE_MOUTH_LAYOUT["top_outer"]
+        else:
+            # Lower lip is folded inward.
+            # Collapse lower outer contour onto lower inner contour.
+
+            inner_indices = MEDIAPIPE_MOUTH_LAYOUT["bottom_inner"]
+            outer_indices = MEDIAPIPE_MOUTH_LAYOUT["bottom_outer"]
+
+
+        for outer_idx, inner_idx in zip(
+            outer_indices,
+            inner_indices
+        ):
+
+            # Copy the x,y coordinates of the inner
+            # contour landmark to the outer contour landmark.
+
+            mp_landmarks[outer_idx].x = (
+                mp_landmarks[inner_idx].x
+            )
+
+            mp_landmarks[outer_idx].y = (
+                mp_landmarks[inner_idx].y
+            )
+
+        return mp_landmarks
+
+    # --------------------------------------------------
+    # Select the appropriate MediaPipe landmark layout
+    # --------------------------------------------------
+
+    if lip_id == 1:     # Top lip
+        # Upper lip
+        upper_indices = MEDIAPIPE_MOUTH_LAYOUT["top_outer"]
+        lower_indices = MEDIAPIPE_MOUTH_LAYOUT["top_inner"]
+
+    else:               # Bottom lip
+        # Lower lip
+        upper_indices = MEDIAPIPE_MOUTH_LAYOUT["bottom_inner"]
+        lower_indices = MEDIAPIPE_MOUTH_LAYOUT["bottom_outer"]
+
+    # --------------------------------------------------
+    # Make a copy so original MediaPipe landmarks
+    # are not modified
+    # --------------------------------------------------
+
+    updated_landmarks = [
+        NormalizedLandmark(
+            x=landmark.x,
+            y=landmark.y,
+            z=landmark.z,
+            visibility=landmark.visibility,
+            presence=landmark.presence,
+            name=landmark.name
+        )
+        for landmark in mp_landmarks
+    ]
+
+    # --------------------------------------------------
+    # Helper function for pixel -> normalized coords
+    # --------------------------------------------------
+
+    def pixel_to_normalized(point):
+
+        x_pixel = float(point[0])
+        y_pixel = float(point[1])
+
+        x_norm = x_pixel / w
+        y_norm = y_pixel / h
+
+        return x_norm, y_norm
+
+    # --------------------------------------------------
+    # Replace upper arc landmarks
+    # --------------------------------------------------
+
+    for mp_idx, point in zip(
+        upper_indices,
+        upper_points
+    ):
+
+        x_norm, y_norm = pixel_to_normalized(
+            point
+        )
+
+        old_landmark = updated_landmarks[mp_idx]
+
+        updated_landmarks[mp_idx] = (
+            NormalizedLandmark(
+                x=x_norm,
+                y=y_norm,
+                z=old_landmark.z,
+                visibility=old_landmark.visibility,
+                presence=old_landmark.presence,
+                name=old_landmark.name
+            )
+        )
+
+    # --------------------------------------------------
+    # Replace lower arc landmarks
+    # --------------------------------------------------
+
+    for mp_idx, point in zip(
+        lower_indices,
+        lower_points
+    ):
+
+        x_norm, y_norm = pixel_to_normalized(
+            point
+        )
+
+        old_landmark = updated_landmarks[mp_idx]
+
+        updated_landmarks[mp_idx] = (
+            NormalizedLandmark(
+                x=x_norm,
+                y=y_norm,
+                z=old_landmark.z,
+                visibility=old_landmark.visibility,
+                presence=old_landmark.presence,
+                name=old_landmark.name
+            )
+        )
+
+    return updated_landmarks
 
 # ====== MediaPipe Visualization and Utility Functions ====== #
 
@@ -225,6 +398,73 @@ def draw_mediapipe_lip_contours(rgb_image, detection_result):
         
     return annotated_image
 
+# def draw_lip_contours(rgb_image, detection_result):
+#     face_landmarks_list = detection_result.face_landmarks
+
+#     annotated_image = np.copy(rgb_image)
+
+#     landmark_drawing_spec = drawing_utils.DrawingSpec(
+#         color=RED_COLOR, thickness=5
+#     )
+
+#     # Loop through the detected faces to visualize.
+#     for idx in range(len(face_landmarks_list)):
+#         face_landmarks = face_landmarks_list[idx]
+    
+#         drawing_utils.draw_landmarks(
+#                 image=annotated_image,
+#                 landmark_list=face_landmarks,
+#                 connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS,
+#                 landmark_drawing_spec=landmark_drawing_spec,
+#                 connection_drawing_spec=drawing_styles.get_default_face_mesh_contours_style())
+        
+#     return annotated_image
+
+def draw_lip_contours(rgb_image, mp_results, contour_color):
+
+    annotated_image = np.copy(rgb_image)
+
+    # MediaPipe lip connections
+    lip_connections = (
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS
+    )
+
+    for connection in lip_connections:
+
+        start_idx = connection.start
+        end_idx = connection.end
+
+        start_landmark = mp_results[start_idx]
+        end_landmark = mp_results[end_idx]
+
+        # Convert normalized coordinates to pixels
+        start_x = int(
+            start_landmark.x * annotated_image.shape[1]
+        )
+
+        start_y = int(
+            start_landmark.y * annotated_image.shape[0]
+        )
+
+        end_x = int(
+            end_landmark.x * annotated_image.shape[1]
+        )
+
+        end_y = int(
+            end_landmark.y * annotated_image.shape[0]
+        )
+
+        cv2.line(
+            annotated_image,
+            (start_x, start_y),
+            (end_x, end_y),
+            contour_color,
+            thickness=2
+        )
+
+    return annotated_image
+
+
 def draw_lip_contour_landmarks(rgb_image, detection_result):
     face_landmarks_list = detection_result.face_landmarks
     face_landmarks = face_landmarks_list[0]  # Assuming only one face is detected for simplicity
@@ -254,7 +494,6 @@ def draw_lip_contour_landmarks(rgb_image, detection_result):
     return annotated_image
 
 def print_lip_landmark_coordinates(detection_result):
-    face_landmarks_list = detection_result.face_landmarks
 
     face_landmarks = detection_result.face_landmarks[0]
 
@@ -315,3 +554,4 @@ def add_lms_to_frame(frame, frame_lm_list, draw_indices = True):
             )
 
     return output_frame
+ 

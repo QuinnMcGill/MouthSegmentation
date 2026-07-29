@@ -54,9 +54,9 @@ print("BASE_MODEL: ", BASE_MODEL)
 
 # ---- Training Parameter Configuration ---- #
 BATCH_SIZE = args.bs
-LEARNING_RATE = 3e-5
+LEARNING_RATE = 1e-5        # LR for prompt encoder and mask decoder. LR for image encoder 1/10 of this value.
 WEIGHT_DECAY = 2e-5
-JITTER_VAL = 10
+JITTER_VAL = 20
 
 MAX_EPOCHS = args.e
 
@@ -88,6 +88,15 @@ sam2_model = build_sam2(
     device=DEVICE,
 )
 
+# Load your fine-tuned checkpoint
+checkpoint = torch.load(
+    "finetuning_sam2/finetuned_weights/best_sam2.1s_HYBRID_v10.pt",
+    map_location=DEVICE,
+    weights_only=False,
+)
+
+sam2_model.load_state_dict(checkpoint["model_state_dict"])
+
 predictor = SAM2ImagePredictor(sam2_model)
 
 # ============================================================
@@ -102,17 +111,35 @@ predictor.model.image_encoder.eval()
 
 # OPTIONAL:
 # Uncomment to finetune full encoder
-#
-# predictor.model.image_encoder.train(True)
+predictor.model.image_encoder.train(False)
 
 # ============================================================
 # Optimizer
 # ============================================================
 
+# optimizer = torch.optim.AdamW(
+#     list(predictor.model.sam_mask_decoder.parameters()) +
+#     list(predictor.model.sam_prompt_encoder.parameters()) + 
+#     list(predictor.model.image_encoder.parameters()),
+#     lr=LEARNING_RATE,
+#     weight_decay=WEIGHT_DECAY,
+# )
+
 optimizer = torch.optim.AdamW(
-    list(predictor.model.sam_mask_decoder.parameters()) +
-    list(predictor.model.sam_prompt_encoder.parameters()),
-    lr=LEARNING_RATE,
+    [
+        # {   # Use a lower learning rate for the image encoder since it is already decent
+        #     "params": predictor.model.image_encoder.parameters(),
+        #     "lr": 1e-5,
+        # },
+        {
+            "params": predictor.model.sam_mask_decoder.parameters(),
+            "lr": 1e-5,
+        },
+        {
+            "params": predictor.model.sam_prompt_encoder.parameters(),
+            "lr": 1e-5,
+        },
+    ],
     weight_decay=WEIGHT_DECAY,
 )
 

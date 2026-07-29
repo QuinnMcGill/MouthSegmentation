@@ -57,6 +57,7 @@ video_writer = cv2.VideoWriter(
 print("Output path:", output_video_path)
 print("VideoWriter opened:", video_writer.isOpened())
 mp_results_list = []
+result = None
 
 while cap.isOpened():
     ret, frame = cap.read()

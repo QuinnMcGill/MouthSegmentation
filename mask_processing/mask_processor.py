@@ -14,9 +14,346 @@ def mask_to_spline(mask):
 
     return contour_to_spline(contour)
 
+def clip_upper_lip_mask(
+    mask,
+    inner_left_corner,
+    outer_left_corner,
+    inner_right_corner,
+    outer_right_corner,
+    padding=0
+):
+    """
+    Prevent an upper lip mask from extending below
+    the MediaPipe corner boundary lines.
+
+    Parameters
+    ----------
+    mask : ndarray [H,W]
+        Binary upper lip mask.
+
+    inner_left_corner : (x,y)
+        MediaPipe inner left lip corner.
+
+    outer_left_corner : (x,y)
+        MediaPipe outer left lip corner.
+
+    inner_right_corner : (x,y)
+        MediaPipe inner right lip corner.
+
+    outer_right_corner : (x,y)
+        MediaPipe outer right lip corner.
+
+    padding : int
+        Number of pixels allowed below the boundary.
+
+    Returns
+    -------
+    clipped_mask : bool ndarray [H,W]
+    """
+
+    mask = mask.astype(bool)
+
+    h, w = mask.shape
+
+    # Convert to arrays
+    inner_left = np.asarray(
+        inner_left_corner,
+        dtype=np.float32
+    )
+
+    outer_left = np.asarray(
+        outer_left_corner,
+        dtype=np.float32
+    )
+
+    inner_right = np.asarray(
+        inner_right_corner,
+        dtype=np.float32
+    )
+
+    outer_right = np.asarray(
+        outer_right_corner,
+        dtype=np.float32
+    )
+
+    # ------------------------------------------------
+    # Create image coordinate grid
+    # ------------------------------------------------
+
+    # Image coordinates
+    yy, xx = np.mgrid[
+        0:h,
+        0:w
+    ]
+
+    yy = yy.astype(np.float32)
+    xx = xx.astype(np.float32)
+
+    # ------------------------------------------------
+    # Left boundary
+    #
+    # outer_left -> inner_left
+    # ------------------------------------------------
+
+    x1, y1 = outer_left
+    x2, y2 = inner_left
+
+    dx_left = x2 - x1
+
+    if abs(dx_left) < 1e-6:
+
+        # Degenerate case
+        left_boundary_y = np.full_like(
+            xx,
+            max(y1, y2)
+        )
+
+    else:
+
+        left_boundary_y = (
+            y1
+            + (
+                (xx - x1)
+                * (y2 - y1)
+                / dx_left
+            )
+        )
+
+    # ------------------------------------------------
+    # Right boundary
+    #
+    # inner_right -> outer_right
+    # ------------------------------------------------
+
+    x1, y1 = inner_right
+    x2, y2 = outer_right
+
+    dx_right = x2 - x1
+
+    if abs(dx_right) < 1e-6:
+
+        right_boundary_y = np.full_like(
+            xx,
+            max(y1, y2)
+        )
+
+    else:
+
+        right_boundary_y = (
+            y1
+            + (
+                (xx - x1)
+                * (y2 - y1)
+                / dx_right
+            )
+        )
+
+    # ------------------------------------------------
+    # Determine horizontal clipping range
+    # ------------------------------------------------
+
+    # min_x = outer_left[0]
+    # max_x = outer_right[0]  
+
+    # # Pixels inside the horizontal range
+    # within_corner_range = (
+    #     (xx >= min_x) &
+    #     (xx <= max_x)
+    # )
+
+    # ------------------------------------------------
+    # Combine the two boundaries
+    #
+    # The upper lip must be above BOTH
+    # boundary lines.
+    # ------------------------------------------------
+
+    boundary_y = np.maximum(
+        left_boundary_y,
+        right_boundary_y
+    )
+
+    # Allow optional padding
+    boundary_y += padding
+
+    # Upper lip must be ABOVE boundary
+    above_boundary = (
+        yy <= boundary_y
+    )
+
+    # ------------------------------------------------
+    # Only clip within corner range
+    #
+    # Outside the range:
+    #     keep original mask
+    #
+    # Inside the range:
+    #     enforce upper-lip constraint
+    # ------------------------------------------------
+
+    # valid_region = (
+    #     (~within_corner_range) |
+    #     above_boundary
+    # )
+
+    clipped_mask = (
+        mask &
+        above_boundary
+    )
+
+    return clipped_mask
+
+def clip_lower_lip_mask(
+    mask,
+    inner_left_corner,
+    outer_left_corner,
+    inner_right_corner,
+    outer_right_corner,
+    padding=0
+):
+    """
+    Prevent a lower lip mask from extending above
+    the MediaPipe corner boundary lines.
+    """
+
+    mask = mask.astype(bool)
+
+    h, w = mask.shape
+
+    inner_left = np.asarray(
+        inner_left_corner,
+        dtype=np.float32
+    )
+
+    outer_left = np.asarray(
+        outer_left_corner,
+        dtype=np.float32
+    )
+
+    inner_right = np.asarray(
+        inner_right_corner,
+        dtype=np.float32
+    )
+
+    outer_right = np.asarray(
+        outer_right_corner,
+        dtype=np.float32
+    )
+
+    # ------------------------------------------------
+    # Create image coordinate grid
+    # ------------------------------------------------
+
+    yy, xx = np.mgrid[
+        0:h,
+        0:w
+    ]
+
+    yy = yy.astype(np.float32)
+    xx = xx.astype(np.float32)
+
+    # Left boundary
+    x1, y1 = outer_left
+    x2, y2 = inner_left
+
+    dx_left = x2 - x1
+
+    if abs(dx_left) < 1e-6:
+
+        left_boundary_y = np.full_like(
+            xx,
+            max(y1, y2)
+        )
+
+    else:
+
+        left_boundary_y = (
+            y1
+            + (
+                (xx - x1)
+                * (y2 - y1)
+                / dx_left
+            )
+        )
+
+    # Right boundary
+    x1, y1 = inner_right
+    x2, y2 = outer_right
+
+    dx_right = x2 - x1
+
+    if abs(dx_right) < 1e-6:
+
+        right_boundary_y = np.full_like(
+            xx,
+            max(y1, y2)
+        )
+
+    else:
+
+        right_boundary_y = (
+            y1
+            + (
+                (xx - x1)
+                * (y2 - y1)
+                / dx_right
+            )
+        )
+
+    # ------------------------------------------------
+    # Determine horizontal clipping range
+    # ------------------------------------------------
+
+    # min_x = outer_left[0]
+    # max_x = outer_right[0]  
+
+    # within_corner_range = (
+    #     (xx >= min_x) &
+    #     (xx <= max_x)
+    # )
+
+    # ------------------------------------------------
+    # Determine clipping boundary
+    # ------------------------------------------------
+
+    # Lower lip should be below BOTH boundaries
+    boundary_y = np.minimum(
+        left_boundary_y,
+        right_boundary_y
+    )
+
+    boundary_y -= padding
+
+    # Lower lip must be BELOW boundary
+    below_boundary = (
+        yy >= boundary_y
+    )
+
+    # ------------------------------------------------
+    # Only clip within corner range
+    # ------------------------------------------------
+
+    # valid_region = (
+    #     (~within_corner_range) |
+    #     below_boundary
+    # )
+
+    clipped_mask = (
+        mask &
+        below_boundary
+    )
+
+    return clipped_mask
+
 def clean_mask(mask,
+               lip_id,
+               inner_left_corner,
+            outer_left_corner,
+                inner_right_corner,
+                outer_right_corner,
                close_kernel_size=5,
-               open_kernel_size=4):
+               open_kernel_size=4, 
+               corner_padding=2):
     """
     Clean a binary lip mask.
 
@@ -28,6 +365,10 @@ def clean_mask(mask,
     """
 
     mask = mask.astype(np.uint8)
+
+    # -----------------------------
+    # Morphological closing
+    # -----------------------------
 
     # Fill small holes
     close_kernel = cv2.getStructuringElement(
@@ -41,6 +382,10 @@ def clean_mask(mask,
         close_kernel
     )
 
+    # -----------------------------
+    # Morphological opening
+    # -----------------------------
+
     # Remove isolated noise
     open_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
@@ -52,6 +397,11 @@ def clean_mask(mask,
         cv2.MORPH_OPEN,
         open_kernel
     )
+
+    # -----------------------------
+    # Largest connected component
+    # TODO: problably change this in cases where the tongue is out
+    # -----------------------------
 
     # Keep largest connected component
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
@@ -67,30 +417,61 @@ def clean_mask(mask,
 
         mask = (labels == largest_label).astype(np.uint8)   # keep only the largest connected component
 
-    return mask.astype(bool)
+    mask = mask.astype(bool)
 
+    # return mask
 
-def process_video_segments(video_segments):
-    """
-    Process all masks in a frame.
+    # -----------------------------
+    # Lip-specific geometric cleanup
+    # -----------------------------
 
-    Args:
-        video_segments:
-            {
-                obj_id: mask
-            }
+    if lip_id == 1:
 
-    Returns:
-        processed dictionary
-    """
+        # Upper lip
+        mask = clip_upper_lip_mask(
+            mask,
+            inner_left_corner,
+            outer_left_corner,
+            inner_right_corner,
+            outer_right_corner,
+            padding=corner_padding
+        )
 
-    processed = {}
+    elif lip_id == 2:
 
-    for obj_id, mask in video_segments.items():
+        # Lower lip
+        mask = clip_lower_lip_mask(
+            mask,
+            inner_left_corner,
+            outer_left_corner,
+            inner_right_corner,
+            outer_right_corner,
+            padding=corner_padding
+        )
 
-        mask = np.squeeze(mask)
+    return mask
 
-        processed[obj_id] = clean_mask(mask)
+# def process_video_segments(video_segments):
+#     """
+#     Process all masks in a frame.
+
+#     Args:
+#         video_segments:
+#             {
+#                 obj_id: mask
+#             }
+
+#     Returns:
+#         processed dictionary
+#     """
+
+#     processed = {}
+
+#     for obj_id, mask in video_segments.items():
+
+#         mask = np.squeeze(mask)
+
+#         processed[obj_id] = clean_mask(mask)
 
     return processed
 

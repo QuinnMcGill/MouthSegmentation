@@ -33,8 +33,7 @@ import mediapipe_resources.mp_utils as mp_utils
 
 # Processing SAM2 Masks and refineing Mediapipe landmarks
 import mask_processing.mask_processor as mask_processor
-import refine_landmarks.landmark_refinement_utils as refinement_utils
-import refine_landmarks.op1_constrained_spline as con_spline
+import refine_landmarks.refinement_utils as refinement_utils
 
 # ====== Step 1: Setup the environment ====== #
 
@@ -45,7 +44,7 @@ TONGUE_OBJ_ID = 3
 # Parse the command line arguments
 parser = argparse.ArgumentParser(description='Refine MediaPipe mouth landmarks using SAM2 segmentation masks')
 parser.add_argument('--v', '--video_filename', type=str, default='tc6.mp4', help='.mp4 filename of test video in mocapvids directory')
-parser.add_argument('--debug', '--debug_mode', type=int, default=0, help='Enter 1 if you want to load the saved state (default: 0)')
+parser.add_argument('--debug', '--debug_stage', type=int, default=0, help='0: doe not use saved stage, 1: stage 1 saved state, 2: stage 2 saved state')
 parser.add_argument('--bm', '--base_model', type=str, default='s', help='SAM2.1 base model (options: s, b, l, t)')
 parser.add_argument('--d', '--dataset', type=str, default='maya', help='Name of dataset to train on (options: "maya", "lapa" or "hybrid")')
 parser.add_argument('--sv', '--save_video', type=int, default=0, help='Whether to save the output segmentation video (boolean)')
@@ -91,20 +90,36 @@ elif device.type == "mps":
 # ====== Step 2: Define Helper Functions ====== #
 
 # ------ 2.3: Visualization and Debugging Functions ------ #
-def save_state(sam2_video_segs, mp_lip_results_list, save_path):
+def save_state_stage1(sam2_video_segs, mp_results_list, mp_lip_results_list, save_path):
     np.savez_compressed(
         save_path,
         sam2_video_segs=sam2_video_segs,
+        mp_results_list=mp_results_list,
         mp_lip_results_list=mp_lip_results_list
     )
-    print(f"Saved state to {save_path}")
+    print(f"Saved (Stage 1) state to {save_path}")
 
-def load_saved_state(load_path):
+def save_state_stage2(sam2_mp_results, save_path):
+    np.savez_compressed(
+        save_path,
+        sam2_mp_results=sam2_mp_results,
+    )
+    print(f"Saved (Stage 2) state to {save_path}")
+
+def load_saved_state_stage1(load_path):
     data = np.load(load_path, allow_pickle=True)
     sam2_video_segs = data['sam2_video_segs'].item()
     mp_lip_results_list = data['mp_lip_results_list'].tolist()
-    print(f"Loaded state from {load_path}")
-    return sam2_video_segs, mp_lip_results_list
+    mp_results_list = data['mp_results_list']
+    print(f"Loaded (Stage 1) state from {load_path}")
+    return sam2_video_segs, mp_results_list, mp_lip_results_list
+
+
+def load_saved_state_stage2(load_path):
+    data = np.load(load_path, allow_pickle=True)
+    sam2_mp_results = data['sam2_mp_results'].tolist()
+    print(f"Loaded (Stage 2) state from {load_path}")
+    return sam2_mp_results
 
 # ====== Step 3: Initialize SAM2 predictor and Mediapipe Landmarker ====== #
 
@@ -124,7 +139,7 @@ frame_names = [
 frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
 
 # ====== Step 5: Add prompts for different mouth parts ====== #
-if not args.debug:
+if args.debug == 0:
     # SAM 2 requires stateful inference for interactive video segmentation, so we need to 
     # initialize an 'inference state' on this video. During initialization, it loads all 
     # the JPEG frames in `video_path` and stores their pixels in `inference_state`.
@@ -155,7 +170,7 @@ mouth_parts = {
 # We will add `args.npp` prompts for each mouth part, evenly spaced throughout the video.
 prompt_spacing = len(frame_names) // args.npp
 
-if not args.debug:
+if args.debug == 0:
     # ------ Upper Lip ------
     decent_ul_boxes = []
     decent_ul_boxes_4 = [[408, 840, 628, 882], [377, 700, 608, 860], [428, 782, 684, 846], [446, 777, 692, 824]]
@@ -279,7 +294,7 @@ if not args.debug:
     #             box=box_tg,
     #         )
 
-    # ====== Step 6: Run SAM2 Video Object Segmentation and Tracking ====== #
+    # ====== Step 5: Run SAM2 Video Object Segmentation and Tracking ====== #
 
     # run propagation throughout the video and collect the results in a dict
     sam2_video_segs = {}  # sam2_video_segs contains the per-frame segmentation results
@@ -289,95 +304,114 @@ if not args.debug:
             for i, out_obj_id in enumerate(out_obj_ids)
         }
 
-    # ====== Step 7: Generate MediaPipe Landmark Predictions ====== #
+    # ====== Step 6: Generate MediaPipe Landmark Predictions ====== #
     mp_results_list = mp_utils.get_mp_landmarks(os.path.join("mocapvids", args.v), mp_detector)
     mp_lip_results_list = mp_utils.isolate_lip_landmarks(mp_results_list)
 
-    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
-    save_state(sam2_video_segs, mp_lip_results_list, save_path)
+    save_path = f"saved_states/stage1/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
+    save_state_stage1(sam2_video_segs, mp_results_list, mp_lip_results_list, save_path)
 else:
     # If the user wants to load the saved state, we can skip the above steps and directly load the SAM2 
     # segmentation results and MediaPipe landmark predictions from a .npz file.
 
     # ====== Optional: Save the SAM2 segmentation results and MediaPipe landmark predictions ====== #
-    save_path = f"saved_states/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
-    sam2_video_segs, mp_lip_results_list = load_saved_state(save_path)
+    save_path = f"saved_states/stage1/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
+    sam2_video_segs, mp_results_list, mp_lip_results_list = load_saved_state_stage1(save_path)
 
-num_example_frames = 6
-example_frame_inc = len(frame_names) // num_example_frames
+# ====== Step 7: Refine MediaPipe Predictions ====== #
 
-# ====== Step 8: Refine MediaPipe Predictions ====== #
-'''
-with tqdm(total=len(mp_lip_results_list), desc="Refining MediaPipe Lip Landmarks with SAM2 Masks") as pbar:
-    for frame_idx, (frame_mp_lms, frame_sam2_segs) in enumerate(zip(mp_lip_results_list, sam2_video_segs.values())):
-        if frame_idx % example_frame_inc == 0:
-            print(f"Refining frame {frame_idx} / {len(mp_lip_results_list)}")
+# Access the first from to save the height and width
+first_frame = np.array(Image.open(os.path.join(video_dir, frame_names[0])))
 
-            for obj_id, raw_mask in frame_sam2_segs.items():
-                raw_mask = raw_mask.squeeze()
-                raw_mask = mask_processor.clean_mask(raw_mask)
+h, w = first_frame.shape[:2]
 
-            refinement_utils.visualize_mp_sam_frame(
-                frame=np.array(Image.open(os.path.join(video_dir, frame_names[frame_idx]))),
-                frame_idx=frame_idx,
-                sam2_video_segs=sam2_video_segs,
-                mp_lip_results_list=mp_lip_results_list,
-                alpha=0.5,
-                draw_indices=True
-            )
+if args.debug < 2:      # i.e. we are not using a stage 2 saved state
+
+    # Save a copy of the original Mediapipe results
+    sam2_mp_results = mp_results_list.copy()
+
+    # Processing Steps (per-frame, per-mask):
+    #   1. Clean the lip mask (top or bottom) by removing noise 
+    #   2. Turn the lip mask into a smoothed spline to removing jagged lip contours
+    #   3. 
+    with tqdm(total=len(mp_lip_results_list), desc="Refining MediaPipe Lip Landmarks with SAM2 Masks") as pbar:
+
+        # Loop through each frame in the video
+        for frame_idx in range(len(frame_names)):
+
+            # Create a copy of the Mediapipe landmarks that will be updated
+            frame_landmarks = sam2_mp_results[frame_idx]
+
+            if frame_idx in sam2_video_segs:
+
+                # Create MediaPipe landmark look-up table for this frame
+                mp_lookup_table = refinement_utils.build_landmark_lookup(mp_lip_results_list[frame_idx], w, h)
+
+                # Find the Mediapipe-predicted mouth corners for anchoring
+                inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner = refinement_utils.find_mp_corners(mp_lookup_table, h, w)
+
+                for obj_id, raw_mask in sam2_video_segs[frame_idx].items():
+                    
+                    if obj_id == UPPER_LIP_OBJ_ID or obj_id == LOWER_LIP_OBJ_ID:   # Create sam2-points for top and bottom lip
+
+                        # --------------------------------------
+                        # Mask Processing
+                        # --------------------------------------
+
+                        raw_mask = raw_mask.squeeze()
+
+                        # Clean the raw sam2 mask to remove holes and noise
+                        clean_mask_result = mask_processor.clean_mask(raw_mask, obj_id, inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner)
+
+                        # Convert the cleaned mask into a smooth spline
+                        spline = mask_processor.mask_to_spline(clean_mask_result)
+
+                        # --------------------------------------
+                        # Combining SAM2 and Mediapipe Results
+                        # --------------------------------------
+
+                        # Create points along the SAM2 lip contours
+                        upper_points, lower_points = refinement_utils.generate_sam2_guided_landmarks(obj_id, spline, inner_left_corner, outer_left_corner, 
+                                                                                                    inner_right_corner, outer_right_corner, mp_lookup_table)
+
+                        # Append Mediapipe mouth corners (only if a SAM2 mask is found) to upper SAM2 contour points
+                        if obj_id == 1:     # Top Lip
+                            if upper_points is not None:
+                                upper_points = np.vstack([
+                                    np.array(outer_left_corner), 
+                                    upper_points, 
+                                    np.array(outer_right_corner)
+                                ])
+                            if lower_points is not None:
+                                lower_points = np.vstack([
+                                    np.array(inner_left_corner), 
+                                    lower_points, 
+                                    np.array(inner_right_corner)
+                                ])
+
+                        # Replace the original Mediapipe ladnmarks with these SAM2-guided points
+                        frame_landmarks = mp_utils.replace_mp_lip_landmarks(frame_landmarks, obj_id, upper_points, lower_points, h, w)
+
+                    else:   # Tongue Mask
+                        print("Tongue mask detected. Currently not processing tongue masks in this version of the code.")
+
+                # Save the refined landmark results
+                sam2_mp_results[frame_idx] = frame_landmarks
             
-        # # Get the SAM2 masks for this frame
-        # upper_lip_mask = frame_sam2_segs.get(1, None)
-        # lower_lip_mask = frame_sam2_segs.get(2, None)
+            pbar.update(1)
 
-        # # Clean masks using morphological operations and keep largest connected component
-        # if upper_lip_mask is not None:
-        #     upper_lip_mask = mask_processor.clean_mask(upper_lip_mask)
-        # if lower_lip_mask is not None:
-        #     lower_lip_mask = mask_processor.clean_mask(lower_lip_mask)
-        
-        # # Turn clean masks to splines
-        # upper_lip_spline = None if upper_lip_mask is None else mask_processor.mask_to_spline(upper_lip_mask)
-        # lower_lip_spline = None if lower_lip_mask is None else mask_processor.mask_to_spline(lower_lip_mask)
+    save_path = f"saved_states/stage2/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
+    save_state_stage2(sam2_mp_results, save_path)
+else:                   # Load the stage 2 saved state
+    save_path = f"saved_states/stage2/{args.v.split('.mp4')[0]}_{args.d}_sam2{args.bm}_fw{fw_idx}_{args.npp}pp_mp_results.npz"
+    sam2_mp_results = load_saved_state_stage2(save_path)
 
-        # Refine the MediaPipe landmarks using the SAM2 masks
-        # refined_landmarks = refinement_utils.refine_landmarks_with_masks(
-        #     mp_landmarks=mp_lip_landmarks,
-        #     sam2_masks=sam2_masks,
-        #     mouth_parts=mouth_parts
-        # )
-
-        # # Update the refined landmarks in the list
-        # mp_lip_results_list[frame_idx] = refined_landmarks
-
-        pbar.update(1)'''
-
-# ====== STEP 9: Visualize some of the segmented frames ====== #
-# frame_stride = 30
-# for out_frame_idx in range(0, len(frame_names), frame_stride):
-#     plt.figure(figsize=(6, 4))
-#     plt.title(f"frame {out_frame_idx}")
-#     plt.imshow(Image.open(os.path.join(video_dir, frame_names[out_frame_idx])))
-#     for out_obj_id, out_mask in sam2_video_segs[out_frame_idx].items():
-#         show_mask(out_mask, plt.gca(), obj_id=out_obj_id)
-
-#     plt.axis('off')
-#     plt.show()
-
-
-
-# ====== Step 10 (Optional): Create Segmentation Video ====== #
+# ====== Step 8: Create Segmentation Video ====== #
 
 if args.sv == 1:
-    # Load first frame to get video dimensions
-    first_frame = np.array(
-        Image.open(os.path.join(video_dir, frame_names[0]))
-    )
-
-    height, width = first_frame.shape[:2]
 
     # Output video path
-    output_video_path = f"sam2_guided_mp_results/{base_model}_{dataset}_fw{fw_idx}_{args.npp}pp_{args.v}"
+    output_video_path = f"sam2_guided_mp_results/DEBUG_{base_model}_{dataset}_fw{fw_idx}_{args.npp}pp_{args.v}"
 
     # Video writer
     fps = 30
@@ -387,14 +421,12 @@ if args.sv == 1:
         output_video_path,
         fourcc,
         fps,
-        (width, height)
+        (w, h)
     )
 
-    alpha = 0.5
+    mp_results_copy = mp_results_list.copy()
 
     # ----- Generate Frames ------ #
-    example_frames = len(frame_names) // 5
-
     for frame_idx in range(len(frame_names)):
 
         frame_path = os.path.join(video_dir, frame_names[frame_idx])
@@ -404,179 +436,32 @@ if args.sv == 1:
         )
 
         output_frame = frame.copy()
-        h, w = frame.shape[:2]
 
-        # Draw masks
-        if frame_idx in sam2_video_segs:
+        # Add the mediapipe landmarks for comparison
+        output_frame = mp_utils.add_lms_to_frame(output_frame, mp_lip_results_list[frame_idx], False)
 
-            for obj_id, raw_mask in sam2_video_segs[frame_idx].items():
-                
-                if obj_id == UPPER_LIP_OBJ_ID or obj_id == LOWER_LIP_OBJ_ID:   # Create sam2-points for upper and bottom lips
-                    raw_mask = raw_mask.squeeze()
+        # Add medaipipe lip contours
+        output_frame = mp_utils.draw_lip_contours(output_frame, mp_results_list[frame_idx], (0, 0, 255))
 
-                    # Clean the raw sam2 mask to remove holes and noise
-                    clean_mask_result = mask_processor.clean_mask(raw_mask)
+        # Add SAM2-guided lip landmarks
+        for idx, point in enumerate(sam2_mp_results[frame_idx]):
+            if idx not in mp_utils.lip_indices:
+                continue
 
-                    # Convert the cleaned mask into a smooth spline
-                    spline = mask_processor.mask_to_spline(clean_mask_result)
+            x = round((point.x * w))
+            y = round((point.y * h))
 
-                    # Find the Mediapipe-predicted mouth corners for anchoring
-                    inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner = con_spline.find_mp_corners(mp_lip_results_list[frame_idx], h, w)
+            cv2.circle(
+                output_frame,
+                (x, y),
+                3,
+                (0, 0, 0),  # Black
+                -1
+            )
 
-                    # Sample points along the predicted SAM2 lip contours
-                    upper_points, lower_points = con_spline.refine_lip_contour(obj_id, spline, inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner, 11, output_frame)
-
-                    # Visualize some sample frames
-                    if (frame_idx % example_frames == 0):
-                        vis_frame = frame.copy()
-                        # Convert RGB -> BGR
-                        vis_frame = cv2.cvtColor(
-                            vis_frame,
-                            cv2.COLOR_RGB2BGR
-                        )
-                        '''
-                        # Visulaize the mask cleanup
-                        mask_processor.visualize_mask_cleanup(
-                            frame,
-                            raw_mask, 
-                            clean_mask_result
-                        )
-
-                        # Visualize the spline
-                        mask_processor.visualize_spline(
-                            frame,
-                            spline
-                        )
-                        '''
-                        #left_corner, right_corner = con_spline.find_mp_corner_midpoint(mp_lip_results_list[frame_idx], h, w)
-                        # inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner = con_spline.find_mp_corners(mp_lip_results_list[frame_idx], h, w)
-                        
-                        #upper_arc, lower_arc = con_spline.refine_lip_contour(spline, left_corner, right_corner, 11)
-                        # upper_points, lower_points = con_spline.refine_lip_contour_4(obj_id, spline, inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner, 11)
-
-                        # corners = [inner_left_corner, outer_left_corner, inner_right_corner, outer_right_corner]
-                        # for corner in corners:
-                        #     cv2.circle(
-                        #         vis_frame,
-                        #         (corner[0], corner[1]),
-                        #         3,
-                        #         (0, 0, 0),  # Black
-                        #         -1
-                        #     )
-
-                        # if upper_arc is not None: # Only add spline if a lip was located
-                        #     pts = np.round(upper_arc).astype(np.int32)
-
-                        #     # Draw closed polyline
-                        #     cv2.polylines(
-                        #         vis_frame,
-                        #         [pts],
-                        #         isClosed=False,
-                        #         color=(255, 0, 0),  # Green  
-                        #         thickness=2,
-                        #         lineType=cv2.LINE_AA
-                        #     )
-                        
-                        # if lower_arc is not None: # Only add spline if a lip was located
-                        #     pts = np.round(lower_arc).astype(np.int32)
-
-                        #     # Draw closed polyline
-                        #     cv2.polylines(
-                        #         vis_frame,
-                        #         [pts],
-                        #         isClosed=False,
-                        #         color=(0, 0, 255),   # Red
-                        #         thickness=2,
-                        #         lineType=cv2.LINE_AA
-                        #     )
-
-                        # ========== Visualize the points ============ 
-                        # cv2.namedWindow(
-                        #     "Average Corners",
-                        #     cv2.WINDOW_NORMAL
-                        # )
-
-                        # if upper_points is not None:
-                        #     for p in upper_points:
-                        #         cv2.circle(
-                        #             vis_frame,
-                        #             tuple(np.round(p).astype(int)),
-                        #             3,
-                        #             (0, 0, 255),   # Red
-                        #             -1
-                        #         )
-
-                        # if lower_points is not None:
-                        #     for p in lower_points:
-                        #         cv2.circle(
-                        #             vis_frame,
-                        #             tuple(np.round(p).astype(int)),
-                        #             3,
-                        #             (255, 0, 0),   # Blue
-                        #             -1
-                        #         )
-
-                        # cv2.imshow("Average Corners", vis_frame)
-
-                        # cv2.waitKey(0)
-                        # cv2.destroyAllWindows()
-                        
-                    # Add results to output video frame
-                    top_colors = [(0, 0, 255), (255, 0, 0)]
-                    bottom_colors = [(0, 255, 155), (255, 178, 0)]
-
-                    if obj_id == 1:
-                        colors = top_colors
-                    else:
-                        colors = bottom_colors
-
-                    # Add mask results
-                    mask_uint8 = clean_mask_result.astype(np.uint8)
-
-                    # Overlay the cleaned mask for that lip
-                    output_frame[mask_uint8 > 0] = (
-                        0.8 * output_frame[mask_uint8 > 0] +
-                        0.2 * np.array(colors[0])
-                    ).astype(np.uint8)
-
-                    # Add predicted SAM points
-                    if upper_points is not None:
-                        for p in upper_points:
-                            cv2.circle(
-                                output_frame,
-                                tuple(np.round(p).astype(int)),
-                                3,
-                                colors[0],   
-                                -1
-                            )
-
-                    if lower_points is not None:
-                        for p in lower_points:
-                            cv2.circle(
-                                output_frame,
-                                tuple(np.round(p).astype(int)),
-                                3,
-                                colors[1],   # Blue
-                                -1
-                            )
-                else:   # Tongue Mask
-                    raw_mask = raw_mask.squeeze()
-
-                    # Clean the raw sam2 mask to remove holes and noise
-                    clean_mask_result = mask_processor.clean_mask(raw_mask)
-
-                    # Convert bool mask to uint8
-                    mask_uint8 = clean_mask_result.astype(np.uint8)
-
-                    # Overlay the cleaned mask for that lip
-                    output_frame[mask_uint8 > 0] = (
-                        0.2 * output_frame[mask_uint8 > 0] +
-                        0.8 * np.array([0, 0, 0])
-                    ).astype(np.uint8)
-                
-                # Add the mediapipe landmarks for comparison
-                output_frame = mp_utils.add_lms_to_frame(output_frame, mp_lip_results_list[frame_idx], False)
-                
+        # Add lip contours - > indented once
+        output_frame = mp_utils.draw_lip_contours(output_frame, sam2_mp_results[frame_idx], (255, 0, 0)) #output_frame = mp_utils.draw_lip_contours2(output_frame, updated_landmarks) 
+        
         # Convert RGB -> BGR
         output_frame_bgr = cv2.cvtColor(
             output_frame,
@@ -585,7 +470,6 @@ if args.sv == 1:
 
         video_writer.write(output_frame_bgr)
         
-
     # ====== Finalize ====== #
 
     video_writer.release()

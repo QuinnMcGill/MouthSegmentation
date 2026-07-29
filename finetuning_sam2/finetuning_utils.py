@@ -37,6 +37,7 @@ def create_dataloaders(dataset_name, dataset_root, image_size, batch_size):
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
+            num_workers=4
         )
 
     elif dataset_name == "maya": 
