@@ -50,8 +50,10 @@ MEDIAPIPE_MOUTH_LAYOUT = {
 
 # For Visualization
 RED_COLOR = (255, 0, 0)
+MIN_POINT_RADIUS_RATIO = 0.0025
 
 # ====== MediaPipe Setup and Usage ====== #
+
 
 def initialize_mp():
     base_options = python.BaseOptions(model_asset_path="mediapipe_resources/face_landmarker.task")
@@ -61,7 +63,8 @@ def initialize_mp():
     detector = vision.FaceLandmarker.create_from_options(options)
     return detector
 
-def get_mp_landmarks(path_to_video, mp_detector):
+
+def run_mp_for_video(path_to_video, mp_detector):
     # Initialize frame index
     frame_idx = 0
 
@@ -104,7 +107,7 @@ def get_mp_landmarks(path_to_video, mp_detector):
     return mp_results_list
 
 
-def isolate_lip_landmarks(mp_results_list):
+def extract_lip_landmarks_coords(mp_results_list):
     mp_lip_results_list = []
 
     for frame in mp_results_list:
@@ -116,6 +119,7 @@ def isolate_lip_landmarks(mp_results_list):
         mp_lip_results_list.append(frame_lip_landmarks)
 
     return mp_lip_results_list
+
 
 def replace_mp_lip_landmarks(mp_landmarks, lip_id, upper_points, lower_points, h, w):
     """
@@ -290,11 +294,25 @@ def replace_mp_lip_landmarks(mp_landmarks, lip_id, upper_points, lower_points, h
 
     return updated_landmarks
 
-# ====== MediaPipe Visualization and Utility Functions ====== #
 
-def draw_landmarks_on_image(rgb_image, detection_result):
+# ====== MediaPipe Visualization ====== #
+
+# Does not work in combine_mp_sam2.py because of the way the MediaPipe results are stored in a list of NormalizedLandmark objects.
+#  File "/home/quinnm/repo/MouthSegmentation/.venv_ms/lib/python3.12/site-packages/mediapipe/tasks/python/vision/drawing_utils.py", line 157, in draw_landmarks
+    # if not landmark_list:
+    #        ^^^^^^^^^^^^^
+# ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+def draw_mp_face_mesh(rgb_image, detection_result):
     face_landmarks_list = detection_result.face_landmarks
     annotated_image = np.copy(rgb_image)
+
+    thick_contour_drawing_spec = drawing_utils.DrawingSpec(
+        color=(255,255,255), thickness=5
+    )
+
+    thin_contour_drawing_spec = drawing_utils.DrawingSpec(
+        color=(255,255,255), thickness=2
+    )
 
     # Loop through the detected faces to visualize.
     for idx in range(len(face_landmarks_list)):
@@ -306,77 +324,35 @@ def draw_landmarks_on_image(rgb_image, detection_result):
             landmark_list=face_landmarks,
             connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION,
             landmark_drawing_spec=None,
-            connection_drawing_spec=drawing_styles.get_default_face_mesh_tesselation_style())
+            connection_drawing_spec=thin_contour_drawing_spec)
         drawing_utils.draw_landmarks(
             image=annotated_image,
             landmark_list=face_landmarks,
             connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_CONTOURS,
             landmark_drawing_spec=None,
-            connection_drawing_spec=drawing_styles.get_default_face_mesh_contours_style())
+            connection_drawing_spec=thick_contour_drawing_spec)
+        # drawing_utils.draw_landmarks(
+        #     image=annotated_image,
+        #     landmark_list=face_landmarks,
+        #     connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_IRIS,
+        #     landmark_drawing_spec=None,
+        #     connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
+        # drawing_utils.draw_landmarks(
+        #     image=annotated_image,
+        #     landmark_list=face_landmarks,
+        #     connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS,
+        #     landmark_drawing_spec=None,
+        #     connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
         drawing_utils.draw_landmarks(
             image=annotated_image,
             landmark_list=face_landmarks,
-            connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_IRIS,
+            connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS,
             landmark_drawing_spec=None,
-            connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
-        drawing_utils.draw_landmarks(
-            image=annotated_image,
-            landmark_list=face_landmarks,
-            connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS,
-            landmark_drawing_spec=None,
-            connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
+            connection_drawing_spec=thick_contour_drawing_spec)
 
     return annotated_image
 
-# ------ From external/mediapipe/tasks/python/vision/face_landmarker.py ------ #
-#  FACE_LANDMARKS_LIPS: List[Connection] = [
-#       Connection(61, 146),    $
-#       Connection(146, 91),    $
-#       Connection(91, 181),    $
-#       Connection(181, 84),    $
-#       Connection(84, 17),     $
-#       Connection(17, 314),    $
-#       Connection(314, 405),   $
-#       Connection(405, 321),   $
-#       Connection(321, 375),   $
-#       Connection(375, 291),   $
-#       Connection(61, 185),    $
-#       Connection(185, 40),    $
-#       Connection(40, 39),     $
-#       Connection(39, 37),     $
-#       Connection(37, 0),      $
-#       Connection(0, 267),     $
-#       Connection(267, 269),   $ 
-#       Connection(269, 270),   $
-#       Connection(270, 409),   $
-#       Connection(409, 291),   $
-#       Connection(78, 95),     $
-#       Connection(95, 88),     $
-#       Connection(88, 178),    $
-#       Connection(178, 87),    $
-#       Connection(87, 14),     $
-#       Connection(14, 317),    $
-#       Connection(317, 402),   $
-#       Connection(402, 318),   $
-#       Connection(318, 324),   $
-#       Connection(324, 308),   $
-#       Connection(78, 191),    $
-#       Connection(191, 80),    $
-#       Connection(80, 81),     $
-#       Connection(81, 82),     $
-#       Connection(82, 13),     $
-#       Connection(13, 312),    $
-#       Connection(312, 311),   $
-#       Connection(311, 310),
-#       Connection(310, 415),
-#       Connection(415, 308),
-#   ]
-
-'''
-    Draw only the landmarks which correspond to the lips. This is useful for visualizing the lip movements without the distraction
-    of other facial landmarks.
-'''
-
+# Likely, a similar issue as above
 def draw_mediapipe_lip_contours(rgb_image, detection_result):
     face_landmarks_list = detection_result.face_landmarks
     annotated_image = np.copy(rgb_image)
@@ -398,29 +374,12 @@ def draw_mediapipe_lip_contours(rgb_image, detection_result):
         
     return annotated_image
 
-# def draw_lip_contours(rgb_image, detection_result):
-#     face_landmarks_list = detection_result.face_landmarks
 
-#     annotated_image = np.copy(rgb_image)
-
-#     landmark_drawing_spec = drawing_utils.DrawingSpec(
-#         color=RED_COLOR, thickness=5
-#     )
-
-#     # Loop through the detected faces to visualize.
-#     for idx in range(len(face_landmarks_list)):
-#         face_landmarks = face_landmarks_list[idx]
-    
-#         drawing_utils.draw_landmarks(
-#                 image=annotated_image,
-#                 landmark_list=face_landmarks,
-#                 connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS,
-#                 landmark_drawing_spec=landmark_drawing_spec,
-#                 connection_drawing_spec=drawing_styles.get_default_face_mesh_contours_style())
-        
-#     return annotated_image
-
-def draw_lip_contours(rgb_image, mp_results, contour_color):
+def draw_lip_contours(rgb_image, lm_results, contour_colour):
+    ''''
+    Draw lines connecting the lip landmarks on the image. The lip landmarks can either
+    be the MediaPipe predicted landmarks or the SAM2-influenced landmarks. 
+    '''
 
     annotated_image = np.copy(rgb_image)
 
@@ -434,8 +393,8 @@ def draw_lip_contours(rgb_image, mp_results, contour_color):
         start_idx = connection.start
         end_idx = connection.end
 
-        start_landmark = mp_results[start_idx]
-        end_landmark = mp_results[end_idx]
+        start_landmark = lm_results[start_idx]
+        end_landmark = lm_results[end_idx]
 
         # Convert normalized coordinates to pixels
         start_x = int(
@@ -458,58 +417,62 @@ def draw_lip_contours(rgb_image, mp_results, contour_color):
             annotated_image,
             (start_x, start_y),
             (end_x, end_y),
-            contour_color,
+            contour_colour,
             thickness=2
         )
 
     return annotated_image
 
 
-def draw_lip_contour_landmarks(rgb_image, detection_result):
-    face_landmarks_list = detection_result.face_landmarks
-    face_landmarks = face_landmarks_list[0]  # Assuming only one face is detected for simplicity
-    annotated_image = np.copy(rgb_image)
+def add_lms_to_frame(frame, frame_lm_list, lm_colour=(255, 255, 255), draw_indices = True):
+    """
+    Takes any frame and adds annotated landmarks. Landmarks can be straight from MediaPipe or can 
+    be the sam2-influenced landmarks.
 
-    h, w = rgb_image.shape[:2]
+    Parameters
+    ----------
+    frame : ndarray (RGB or BGR)
+        Video frame corresponding to frame_idx
 
-    for idx in lip_indices:
+    frame_lm_list : list of normalized lip landmark locations (3D), along with their associated 
+                    MediaPipe landmark index
+    """
 
-        lm = face_landmarks[idx]
+    h, w = frame.shape[:2]
 
-        px = int(lm.x * w)
-        py = int(lm.y * h)
+    max_dim = max(h, w)
+    point_radius = round(max_dim*MIN_POINT_RADIUS_RATIO)
 
-        cv2.circle(annotated_image, (px, py), 2, (0,255,0), -1)
+    output_frame = frame.copy()
 
-        cv2.putText(
-            annotated_image,
-            str(idx),
-            (px + 3, py - 3),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0,0,255),
-            1
+    for idx, point in enumerate(frame_lm_list):
+
+        px = int(point.x * w)
+        py = int(point.y * h)
+
+        cv2.circle(
+            output_frame,
+            (px, py),
+            point_radius,
+            lm_colour,
+            -1
         )
-        
-    return annotated_image
 
-def print_lip_landmark_coordinates(detection_result):
+        if draw_indices:
+            cv2.putText(
+                output_frame,
+                str(idx),
+                (px + 4, py - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (255, 255, 255),
+                1
+            )
 
-    face_landmarks = detection_result.face_landmarks[0]
+    return output_frame
 
-    lip_points = []
 
-    for idx in lip_indices:
-        lm = face_landmarks[idx]
-
-        lip_points.append(lm)
-
-    lip_points = np.array(lip_points)
-
-    print(lip_points.shape)
-    print(lip_points)
-
-def add_lms_to_frame(frame, frame_lm_list, draw_indices = True):
+def draw_face_mesh(frame, frame_lm_list):
     """
     Takes any frame and adds annotated landmarks. Landmarks can be straight from MediaPipe or can 
     be the sam2-influenced landmarks.
@@ -527,31 +490,68 @@ def add_lms_to_frame(frame, frame_lm_list, draw_indices = True):
 
     output_frame = frame.copy()
 
-    for lm in frame_lm_list:
+    # MediaPipe lip connections
+    lip_connections = (
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS
+    )
+    face_connections = (
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION
+    )
+    face_contour_connections = (
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_CONTOURS
+    )
 
-        mp_idx = int(lm[0])
+    for connection_list, contour_colour in zip([face_connections, face_contour_connections, lip_connections],[(255,255,255), (255,255,255), (0,0,255)]):
+        for connection in connection_list:
 
-        px = int(lm[1] * w)
-        py = int(lm[2] * h)
+            start_idx = connection.start
+            end_idx = connection.end
 
-        cv2.circle(
-            output_frame,
-            (px, py),
-            3,
-            (255, 255, 255),  # Red
-            -1
-        )
+            start_landmark = frame_lm_list[start_idx]
+            end_landmark = frame_lm_list[end_idx]
 
-        if draw_indices:
-            cv2.putText(
+            # Convert normalized coordinates to pixels
+            start_x = int(
+                start_landmark.x * w
+            )
+
+            start_y = int(
+                start_landmark.y * h
+            )
+
+            end_x = int(
+                end_landmark.x * w
+            )
+
+            end_y = int(
+                end_landmark.y * h
+            )
+
+            cv2.line(
                 output_frame,
-                str(mp_idx),
-                (px + 4, py - 4),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.35,
-                (255, 255, 255),
-                1
+                (start_x, start_y),
+                (end_x, end_y),
+                contour_colour,
+                thickness=2
             )
 
     return output_frame
- 
+
+# ======== Debugging ========= #
+
+
+def print_lip_landmark_coordinates(detection_result):
+
+    face_landmarks = detection_result.face_landmarks[0]
+
+    lip_points = []
+
+    for idx in lip_indices:
+        lm = face_landmarks[idx]
+
+        lip_points.append(lm)
+
+    lip_points = np.array(lip_points)
+
+    print(lip_points.shape)
+    print(lip_points)

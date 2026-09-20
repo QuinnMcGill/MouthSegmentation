@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import os
+import cv2
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -14,8 +15,9 @@ MODEL_DICT = {'s': 'small', 'b': 'base_plus', 'l': 'large', 't': 'tiny'}
 
 # ====== SAM2 Configuration ====== #
 
-def initialize_sam2(base_model_letter, device, finetuned_weights=None):
+def initialize_sam2(base_model, device, finetuned_weights=None):
     # Load the base SAM2 model with the original weights (no fine-tuning)
+    base_model_letter = base_model[-1]  # Extract the last character to determine the model type (s, b, l, t)
     sam2_checkpoint = os.path.join("external/sam2/checkpoints", "sam2.1_hiera_" + MODEL_DICT[base_model_letter] + ".pt")
     model_cfg = "configs/sam2.1/sam2.1_hiera_" + base_model_letter + ".yaml"
 
@@ -25,18 +27,9 @@ def initialize_sam2(base_model_letter, device, finetuned_weights=None):
 
     # Load the fine-tuned model weights (optional)
     if finetuned_weights is not None:
-        # Get the row index of the results for these finetuned weights
-        ft_res_df = pd.read_csv("finetuning_sam2/finetuning_results.csv")
-        fw_idx = ft_res_df.index[ft_res_df['finetuned_weights'] == 'finetuning_sam2/finetuned_weights/' + finetuned_weights][0]
-
-        # Get the model type
-        base_model = ft_res_df.loc[fw_idx, 'base_model']
-
-        # Get the dataset
-        dataset_name = ft_res_df.loc[fw_idx, 'dataset']
 
         fw_checkpoint = torch.load(
-            f='finetuning_sam2/finetuned_weights/' + finetuned_weights,
+            f=finetuned_weights,
             map_location=device,
             weights_only=False
         )
@@ -48,6 +41,129 @@ def initialize_sam2(base_model_letter, device, finetuned_weights=None):
     return predictor
 
 # ====== Generating SAM2 Promts ====== #
+
+# Might want to move this to a utils file for visualization, but for now it's here since it's used in the SAM2 utils
+def generate_mouth_crop_box(frame):
+    """
+    Ask the user to draw a bounding box around the mouth region.
+
+    Instructions:
+        - Click TOP LEFT corner
+        - Click BOTTOM RIGHT corner
+        - Press 'r' to redraw
+        - Press ESC to confirm
+    """
+
+    print(
+        "\nPlease draw a bounding box around the mouth region.\n"
+        "Instructions:\n"
+        "  - Click TOP LEFT corner\n"
+        "  - Click BOTTOM RIGHT corner\n"
+        "  - Press 'r' to redraw\n"
+        "  - Press ESC to confirm and close\n"
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.imshow(frame)
+    ax.set_title("Mouth Crop Bounding Box")
+
+    clicked_points = []
+    bbox = [None]
+    rectangle_patch = [None]
+
+    # ---------------------------------
+    # Mouse click event
+    # ---------------------------------
+    def onclick(event):
+
+        if event.inaxes != ax:
+            return
+
+        # Ignore additional clicks once a box exists
+        if bbox[0] is not None:
+            print("Bounding box already exists. Press 'r' to redraw.")
+            return
+
+        if event.xdata is None or event.ydata is None:
+            return
+
+        x = int(event.xdata)
+        y = int(event.ydata)
+
+        clicked_points.append((x, y))
+
+        print(f"Clicked: ({x}, {y})")
+
+        # Wait until two opposite corners have been selected
+        if len(clicked_points) < 2:
+            print("Select the opposite corner.")
+            return
+
+        (x1, y1), (x2, y2) = clicked_points
+
+        x_min = min(x1, x2)
+        y_min = min(y1, y2)
+        x_max = max(x1, x2)
+        y_max = max(y1, y2)
+
+        bbox[0] = [x_min, y_min, x_max, y_max]  # type:ignore
+
+        rect = patches.Rectangle(
+            (x_min, y_min),
+            x_max - x_min,
+            y_max - y_min,
+            linewidth=2,
+            edgecolor="lime",
+            facecolor="none",
+        )
+
+        rectangle_patch[0] = rect   # type:ignore
+        ax.add_patch(rect)
+
+        fig.canvas.draw()
+
+        print(f"Mouth crop bounding box: {bbox[0]}")
+        print("Press ESC to confirm or 'r' to redraw.")
+
+    # ---------------------------------
+    # Keyboard event
+    # ---------------------------------
+    def onkey(event):
+
+        # Redraw
+        if event.key == "r":
+
+            clicked_points.clear()
+            bbox[0] = None
+
+            if rectangle_patch[0] is not None:
+                rectangle_patch[0].remove()
+                rectangle_patch[0] = None
+
+            fig.canvas.draw()
+
+            print("Selection cleared. Draw a new bounding box.")
+
+        # Confirm
+        elif event.key == "escape":
+
+            if bbox[0] is None:
+                print("No bounding box selected.")
+            else:
+                print("Mouth crop bounding box confirmed.")
+
+            plt.close(fig)
+
+    fig.canvas.mpl_connect("button_press_event", onclick)
+    fig.canvas.mpl_connect("key_press_event", onkey)
+
+    plt.show()
+
+    if bbox[0] is None:
+        return None
+
+    return np.array(bbox[0], dtype=np.int32)
+
 
 def generate_prompt_box(frame, mouth_part, color):
 
@@ -66,7 +182,6 @@ def generate_prompt_box(frame, mouth_part, color):
     ax.set_title(f"Bounding Box Prompt: {mouth_part}", color=tuple(color / 255.0))
 
     clicked_points = []
-    point_artists = []
 
     bbox = [None]
     object_missing = [False]
@@ -82,7 +197,6 @@ def generate_prompt_box(frame, mouth_part, color):
             return
 
         # Ignore additional clicks once a box exists.
-        # User must press 'r' to redraw.
         if bbox[0] is not None:
             print("Bounding box already exists. Press 'r' to redraw.")
             return
@@ -94,42 +208,39 @@ def generate_prompt_box(frame, mouth_part, color):
 
         print(f"Clicked: ({x}, {y})")
 
-        point = ax.scatter(x, y, c="yellow", s=50)
-        point_artists.append(point)
+        # Wait until two opposite corners have been selected
+        if len(clicked_points) < 2:
+            print("Select the opposite corner.")
+            return
+
+        (x1, y1), (x2, y2) = clicked_points
+
+        x_min = min(x1, x2)
+        y_min = min(y1, y2)
+        x_max = max(x1, x2)
+        y_max = max(y1, y2)
+
+        bbox[0] = [x_min, y_min, x_max, y_max]  # type:ignore
+
+        rect = patches.Rectangle(
+            (x_min, y_min),
+            x_max - x_min,
+            y_max - y_min,
+            linewidth=2,
+            edgecolor="lime",
+            facecolor="none",
+        )
+
+        rectangle_patch[0] = rect   # type:ignore
+        ax.add_patch(rect)
 
         fig.canvas.draw()
 
-        if len(clicked_points) == 2:
-
-            (x1, y1), (x2, y2) = clicked_points
-
-            x_min = min(x1, x2)
-            y_min = min(y1, y2)
-
-            x_max = max(x1, x2)
-            y_max = max(y1, y2)
-
-            bbox[0] = [x_min, y_min, x_max, y_max]  # type:ignore
-
-            rect = patches.Rectangle(
-                (x_min, y_min),
-                x_max - x_min,
-                y_max - y_min,
-                linewidth=2,
-                edgecolor="lime",
-                facecolor="none"
-            )
-
-            rectangle_patch[0] = rect   # type:ignore
-            ax.add_patch(rect)
-
-            fig.canvas.draw()
-
-            print(f"Bounding box: {bbox[0]}")
-            print("Press ESC to confirm or 'r' to redraw.")
+        print(f"Bounding box: {bbox[0]}")
+        print("Press ESC to confirm or 'r' to redraw.")
 
     # ---------------------------------
-    # Keyboard event
+    # Keyboard events
     # ---------------------------------
     def onkey(event):
 
@@ -151,11 +262,6 @@ def generate_prompt_box(frame, mouth_part, color):
             if rectangle_patch[0] is not None:
                 rectangle_patch[0].remove()
                 rectangle_patch[0] = None
-
-            for artist in point_artists:
-                artist.remove()
-
-            point_artists.clear()
 
             fig.canvas.draw()
 
@@ -188,7 +294,8 @@ def generate_prompt_box(frame, mouth_part, color):
 
     return np.array(bbox[0], dtype=np.float32)
 
-def generate_prompt_points(frame, mouth_part):
+
+def generate_prompt_points(frame, mouth_part, color):
 
     print(
         f"Please select prompt points for {mouth_part}.\n"
@@ -202,7 +309,7 @@ def generate_prompt_points(frame, mouth_part):
 
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(frame)
-    ax.set_title(f"Prompt Points: {mouth_part}")
+    ax.set_title(f"Point Prompts: {mouth_part}", color=tuple(color / 255.0))
 
     current_point: list[Optional[tuple[int, int]]] = [None]
 

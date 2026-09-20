@@ -36,8 +36,6 @@ detector = vision.FaceLandmarker.create_from_options(options)
 print("Built the model")
 
 # Load the video file
-cv2.namedWindow("MediaPipe Facial Motion Capture", cv2.WINDOW_NORMAL)
-cv2.resizeWindow("MediaPipe Facial Motion Capture", 640, 1440)
 cap = cv2.VideoCapture(INPUT_VIDEO_PATH + args.v)
 
 # Get input video properties
@@ -78,10 +76,8 @@ while cap.isOpened():
 
     # ==== Visualize the tracking ==== #
     # ---- Landmarks and mesh ---- #
-    annotated_image = mph.draw_landmarks_on_image(mp_image.numpy_view(), result)
+    annotated_image = mph.draw_mp_face_mesh(mp_image.numpy_view(), result)
     annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
-
-    cv2.imshow("MediaPipe Facial Motion Capture", annotated_image)
 
     key = cv2.waitKey(1)
     if key == 27:      # ESC to quit

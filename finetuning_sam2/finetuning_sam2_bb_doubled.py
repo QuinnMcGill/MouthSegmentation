@@ -90,7 +90,7 @@ sam2_model = build_sam2(
 
 # Load your fine-tuned checkpoint
 checkpoint = torch.load(
-    "finetuning_sam2/finetuned_weights/best_sam2.1s_HYBRID_v10.pt",
+    "finetuning_sam2/finetuned_weights/best_sam2.1s_MAYA_doubled_v1.pt",
     map_location=DEVICE,
     weights_only=False,
 )
@@ -105,13 +105,13 @@ predictor = SAM2ImagePredictor(sam2_model)
 
 predictor.model.sam_mask_decoder.train(True)
 predictor.model.sam_prompt_encoder.train(True)
+predictor.model.image_encoder.train(True)
 
 # Freeze image encoder initially
-predictor.model.image_encoder.eval()
+# predictor.model.image_encoder.eval()
 
 # OPTIONAL:
 # Uncomment to finetune full encoder
-predictor.model.image_encoder.train(False)
 
 # ============================================================
 # Optimizer
@@ -127,10 +127,10 @@ predictor.model.image_encoder.train(False)
 
 optimizer = torch.optim.AdamW(
     [
-        # {   # Use a lower learning rate for the image encoder since it is already decent
-        #     "params": predictor.model.image_encoder.parameters(),
-        #     "lr": 1e-5,
-        # },
+        {   # Use a lower learning rate for the image encoder since it is already decent
+            "params": predictor.model.image_encoder.parameters(),
+            "lr": 1e-6,
+        },
         {
             "params": predictor.model.sam_mask_decoder.parameters(),
             "lr": 1e-5,

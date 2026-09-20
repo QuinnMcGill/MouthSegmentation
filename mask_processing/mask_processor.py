@@ -346,14 +346,14 @@ def clip_lower_lip_mask(
     return clipped_mask
 
 def clean_mask(mask,
-               lip_id,
-               inner_left_corner,
-            outer_left_corner,
+                lip_id,
+                inner_left_corner,
+                outer_left_corner,
                 inner_right_corner,
                 outer_right_corner,
-               close_kernel_size=5,
-               open_kernel_size=4, 
-               corner_padding=2):
+                close_kernel_size=5,
+                open_kernel_size=4, 
+                corner_padding=2):
     """
     Clean a binary lip mask.
 
@@ -448,6 +448,75 @@ def clean_mask(mask,
             outer_right_corner,
             padding=corner_padding
         )
+
+    return mask
+
+def smooth_mask(mask,
+                close_kernel_size=5,
+                open_kernel_size=4):
+    """
+    Clean a binary lip mask.
+
+    Args:
+        mask: bool or binary numpy array [H,W]
+
+    Returns:
+        cleaned binary mask (bool)
+    """
+
+    mask = mask.astype(np.uint8)
+
+    # -----------------------------
+    # Morphological closing
+    # -----------------------------
+
+    # Fill small holes
+    close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (close_kernel_size, close_kernel_size)
+    )
+
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_CLOSE,
+        close_kernel
+    )
+
+    # -----------------------------
+    # Morphological opening
+    # -----------------------------
+
+    # Remove isolated noise
+    open_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (open_kernel_size, open_kernel_size)
+    )
+
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_OPEN,
+        open_kernel
+    )
+
+    # -----------------------------
+    # Largest connected component
+    # -----------------------------
+
+    # Keep largest connected component
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask,
+        connectivity=8
+    )
+
+    if num_labels > 1:  # More than just background
+
+        largest_label = 1 + np.argmax(
+            stats[1:, cv2.CC_STAT_AREA]
+        )
+
+        mask = (labels == largest_label).astype(np.uint8)   # keep only the largest connected component
+
+    mask = mask.astype(bool)
 
     return mask
 

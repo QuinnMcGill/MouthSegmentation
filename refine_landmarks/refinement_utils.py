@@ -479,7 +479,7 @@ def generate_cross_contour_landmarks(
     outer_points = []
     inner_points = []
 
-    for outer_idx, inner_idx in contour_pairs:
+    for i, (outer_idx, inner_idx) in enumerate(contour_pairs):
 
         mp_outer = mp_lookup[
             outer_idx
@@ -517,6 +517,14 @@ def generate_cross_contour_landmarks(
                 )
             )
 
+        if inner_point is None or outer_point is None:
+            print(
+                f"\nFailed pair {i}: "
+                f"outer={outer_idx}, inner={inner_idx}"
+            )
+            print("Is upper_arc None?: ", upper_arc is None)
+            print("Is lower_arc None?: ", lower_arc is None)    
+
         outer_points.append(
             outer_point
         )
@@ -524,6 +532,20 @@ def generate_cross_contour_landmarks(
         inner_points.append(
             inner_point
         )
+
+    for i, p in enumerate(inner_points):
+        if np.shape(p) != (2,):
+            print(f"Bad inner point {i}:")
+            print(p)
+            print(type(p))
+            print(np.shape(p))
+
+    for i, p in enumerate(outer_points):
+        if np.shape(p) != (2,):
+            print(f"Bad outer point {i}:")
+            print(p)
+            print(type(p))
+            print(np.shape(p))
 
     return (
         np.array(outer_points),
@@ -593,6 +615,8 @@ def generate_sam2_guided_landmarks(
         inner_right_corner, 
         outer_right_corner
     )
+
+    # return upper_arc, lower_arc # Temporary return for testing purposes
 
     # Create points along the inner and outer contours
     if lip_id == 1: # Top lip    

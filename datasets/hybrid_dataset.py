@@ -611,145 +611,169 @@ class HybridDataset(Dataset):
         return len(self.all_samples)   
     
 # ------------ SCRIPT FOR TESTING DATASET ------------
-# from torch.utils.data import DataLoader
-# import matplotlib.pyplot as plt
-# import numpy as np
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+import numpy as np
 
-# lapa_root_dir = "/home/quinnm/.cache/downloaded_datasets/LaPa"
-# maya_root_dir = "datasets/MayaFaces"
+lapa_root_dir = "/home/quinnm/.cache/downloaded_datasets/LaPa"
+maya_root_dir = "datasets/MayaFaces"
 
-# image_size = (1024, 1024)
+image_size = (1024, 1024)
 
-# hybrid_dataset = HybridDataset(
-#     lapa_root_dir,
-#     maya_root_dir,
-#     maya_split=0.3,
-#     image_size=image_size,
-#     transform=None,
-#     landmarks=True, 
-# )
+hybrid_dataset = HybridDataset(
+    lapa_root_dir,
+    maya_root_dir,
+    maya_split=0.9,
+    image_size=image_size,
+    transform=None,
+    landmarks=False, 
+)
 
-# train_loader = DataLoader(dataset=hybrid_dataset, batch_size=8, shuffle=True)
+train_loader = DataLoader(dataset=hybrid_dataset, batch_size=16, shuffle=True)
 
-# print("Length of dataloader: ", len(train_loader))
-# print("Length of dataset: ", len(hybrid_dataset))
+print("Length of dataloader: ", len(train_loader))
+print("Length of dataset: ", len(hybrid_dataset))
 
-# batch = next(iter(train_loader))
+batch = next(iter(train_loader))
 
-# print("---- First Batch ----")
-# print("Image shape:", batch["image"].shape)
-# print("Mask shape:", batch["mask"].shape)
+print("---- First Batch ----")
+print("Image shape:", batch["image"].shape)
+print("Mask shape:", batch["mask"].shape)
 
-# # # --------------------------------------------------
-# # # Visualize first sample in batch
-# # # --------------------------------------------------
+# # --------------------------------------------------
+# # Visualize first sample in batch
+# # --------------------------------------------------
 
-# for idx in range(batch["image"].shape[0]):
-#     # CHW -> HWC
-#     image = batch["image"][idx].permute(1, 2, 0).numpy()
-#     h, w = image.shape[:2]
+for idx in range(batch["image"].shape[0]):
+    # CHW -> HWC
+    image = batch["image"][idx].permute(1, 2, 0).numpy()
+    h, w = image.shape[:2]
 
-#     # Get landmarks if available
-#     lip_corners = None
-#     meaningful_landmarks = None
-#     if batch.get("lip_corners") is not None and batch.get("meaningful_landmarks") is not None:
-#         lip_corners = (
-#             batch["lip_corners"][idx]
-#             .numpy()
-#         )
+    # Get landmarks if available
+    lip_corners = None
+    meaningful_landmarks = None
+    if batch.get("lip_corners") is not None and batch.get("meaningful_landmarks") is not None:
+        lip_corners = (
+            batch["lip_corners"][idx]
+            .numpy()
+        )
 
-#         meaningful_landmarks = (
-#             batch["meaningful_landmarks"][idx]
-#             .numpy()
-#         )
+        meaningful_landmarks = (
+            batch["meaningful_landmarks"][idx]
+            .numpy()
+        )
 
-#     # [2, H, W]
-#     mask = batch["mask"][idx].numpy()
+    # [2, H, W]
+    mask = batch["mask"][idx].numpy()
 
-#     # Create visualization mask
-#     upper_lip = mask[0]
-#     lower_lip = mask[1]
+    # # Create visualization mask
+    # upper_lip = mask[0]
+    # lower_lip = mask[1]
 
-#     mask_vis = np.zeros(
-#         (mask.shape[1], mask.shape[2], 3),
-#         dtype=np.float32
-#     )
+    upper_lip = mask[0].astype(bool)
+    lower_lip = mask[1].astype(bool)
 
-#     # Red = upper lip
-#     mask_vis[..., 0] = upper_lip
+    # Assign overlapping pixels to the upper lip
+    lower_lip = lower_lip & (~upper_lip)
 
-#     # Green = lower lip
-#     mask_vis[..., 1] = lower_lip
+    # Convert back to float for visualization if needed
+    upper_lip = upper_lip.astype(np.float32)
+    lower_lip = lower_lip.astype(np.float32)
 
-#     # --------------------------------------------------
-#     # Plot
-#     # --------------------------------------------------
+    mask_vis = np.zeros(
+        (mask.shape[1], mask.shape[2], 3),
+        dtype=np.float32
+    )
 
-#     overlay = image.copy()
+    # Red = upper lip
+    mask_vis[..., 0] = upper_lip
 
-#     alpha = 0.5
+    # Green = lower lip
+    mask_vis[..., 1] = lower_lip
 
-#     overlay = (
-#         (1 - alpha) * overlay
-#         + alpha * mask_vis
-#     )
+    # --------------------------------------------------
+    # Plot
+    # --------------------------------------------------
 
-#     overlay = np.clip(
-#         overlay,
-#         0,
-#         1
-#     )
+    overlay = image.copy()
 
-#     fig, ax = plt.subplots(
-#         1,
-#         4,
-#         figsize=(20, 5)
-#     )
+    alpha = 0
 
-#     ax[0].imshow(image)
-#     ax[0].set_title("Image")
-#     ax[0].axis("off")
+    overlay = (
+        (1 - alpha) * overlay
+        + 0.5 * mask_vis
+    )
 
-#     ax[1].imshow(mask_vis)
-#     ax[1].set_title(
-#         "Masks\n(Red=Upper, Green=Lower)"
-#     )
-#     ax[1].axis("off")
+    overlay = np.clip(
+        overlay,
+        0,
+        1
+    )
 
-#     ax[2].imshow(overlay)
-#     ax[2].set_title("Overlay")
-#     ax[2].axis("off")
+    # Save the overlay photo for paper writing
+    # Convert from float [0,1] to uint8 [0,255]
+    output_dir = "visuals_for_papers"
+    overlay_uint8 = (overlay * 255).astype(np.uint8)
 
-#     ax[3].imshow(image)
-#     ax[3].axis("off")
+    # Convert RGB -> BGR for OpenCV
+    overlay_bgr = cv2.cvtColor(overlay_uint8, cv2.COLOR_RGB2BGR)
 
-#     if lip_corners is not None and meaningful_landmarks is not None:
+    # Save
+    output_path = os.path.join(output_dir, f"overlay_{idx}.png")
+    cv2.imwrite(output_path, overlay_bgr)
+    print(f"Saved overlay to: {output_path}")
 
-#         # Lip corners
-#         ax[3].scatter(
-#             lip_corners[:, 0] * w,
-#             lip_corners[:, 1] * h,
-#             s=50,
-#             marker="o",
-#             label="Lip Corners"
-#         )
+    fig, ax = plt.subplots(
+        1,
+        4,
+        figsize=(20, 5)
+    )
 
-#         # Meaningful landmarks
-#         ax[3].scatter(
-#             meaningful_landmarks[:, 0] * w,
-#             meaningful_landmarks[:, 1] * h,
-#             s=50,
-#             marker="x",
-#             label="Meaningful Landmarks"
-#         )
+    ax[0].imshow(image)
+    ax[0].set_title("Image")
+    ax[0].axis("off")
 
-#         ax[3].set_title(
-#             "Lip Landmarks"
-#         )
+    ax[1].imshow(mask_vis)
+    ax[1].set_title(
+        "Masks\n(Red=Upper, Green=Lower)"
+    )
+    ax[1].axis("off")
 
-#         ax[3].legend()
+    ax[2].imshow(overlay)
+    ax[2].set_title("Overlay")
+    ax[2].axis("off")
 
-#     plt.tight_layout()
-#     plt.show()
+
+    ax[3].imshow(image)
+    ax[3].axis("off")
+
+    if lip_corners is not None and meaningful_landmarks is not None:
+
+        # Lip corners
+        ax[3].scatter(
+            lip_corners[:, 0] * w,
+            lip_corners[:, 1] * h,
+            s=50,
+            marker="o",
+            label="Lip Corners"
+        )
+
+        # Meaningful landmarks
+        ax[3].scatter(
+            meaningful_landmarks[:, 0] * w,
+            meaningful_landmarks[:, 1] * h,
+            s=50,
+            marker="x",
+            label="Meaningful Landmarks"
+        )
+
+        ax[3].set_title(
+            "Lip Landmarks"
+        )
+
+        ax[3].legend()
+
+    plt.tight_layout()
+    plt.show()
 
 
