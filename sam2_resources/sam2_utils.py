@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 import cv2
+from PIL import Image
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -12,6 +13,27 @@ from sam2.build_sam import build_sam2_video_predictor           #type:ignore
 from sam2.sam2_video_predictor import SAM2VideoPredictor        #type:ignore   
 
 MODEL_DICT = {'s': 'small', 'b': 'base_plus', 'l': 'large', 't': 'tiny'}
+
+# CONTROL PARAMETERS
+UPPER_LIP_OBJ_ID = 1
+LOWER_LIP_OBJ_ID = 2
+
+MOUTH_PARTS = {
+    1: {
+        "name": "Upper Lip",
+        "color": np.array([255, 0, 0], dtype=np.uint8)   # Red
+    },
+
+    2: {
+        "name": "Lower Lip",
+        "color": np.array([0, 255, 0], dtype=np.uint8)   # Green
+    },
+
+    3: {
+        "name": "Tongue",
+        "color": np.array([0, 0, 255], dtype=np.uint8)   # Blue
+    }
+}
 
 # ====== SAM2 Configuration ====== #
 
@@ -42,7 +64,140 @@ def initialize_sam2(base_model, device, finetuned_weights=None):
 
 # ====== Generating SAM2 Promts ====== #
 
-# Might want to move this to a utils file for visualization, but for now it's here since it's used in the SAM2 utils
+def run_sam2_lip_seg(num_parts_per_object, vid_frames_dir, sam2_predictor):
+
+    # Inialize SAM2 inference state
+    inference_state = sam2_predictor.init_state(video_path=vid_frames_dir)
+
+    # Scan all the JPEG frame names in this directory
+    frame_names = [
+        p for p in os.listdir(vid_frames_dir)
+        if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
+    ]
+    frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+
+    prompt_spacing = len(frame_names) // num_parts_per_object
+
+    # ------ Upper Lip ------
+    for prompt_idx in range(num_parts_per_object):
+        ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
+        ann_obj_id = UPPER_LIP_OBJ_ID 
+
+        # Create/Select the bounding box
+        box_ul = generate_prompt_box(
+            frame=np.array(Image.open(os.path.join(vid_frames_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="upper lip", 
+            color = MOUTH_PARTS[1]["color"]
+        )
+        print("--> New ul box created: ", box_ul, '\n')
+
+        # Try adding additional points as prompts
+        points_ul, labels_ul = generate_prompt_points(
+            frame=np.array(Image.open(os.path.join(vid_frames_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="upper lip", 
+            color = MOUTH_PARTS[1]["color"]
+        )
+
+        # Add prompts and get predictions
+        if box_ul is not None:
+            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_points_or_box(
+                inference_state=inference_state,
+                frame_idx=ann_frame_idx,
+                obj_id=ann_obj_id,
+                box=box_ul
+            )
+
+        if points_ul is not None and labels_ul is not None:
+            # Add prompts and get predictions
+            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_points_or_box(
+                inference_state=inference_state,
+                frame_idx=ann_frame_idx,
+                obj_id=ann_obj_id,
+                points=points_ul,
+                labels=labels_ul
+            )
+
+    # ------ Bottom Lip ------
+    for prompt_idx in range(num_parts_per_object):
+        ann_frame_idx = prompt_idx * prompt_spacing  # the frame index we interact with
+        ann_obj_id = LOWER_LIP_OBJ_ID 
+
+        # Create/Select the bounding box
+        box_bl = generate_prompt_box(
+            frame=np.array(Image.open(os.path.join(vid_frames_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="bottom lip", 
+            color = MOUTH_PARTS[2]["color"]
+        )
+        print("--> New bl box created: ", box_bl, "\n")
+        
+        # Try adding additional points as prompts
+        points_bl, labels_bl = generate_prompt_points(
+            frame=np.array(Image.open(os.path.join(vid_frames_dir, frame_names[ann_frame_idx]))), 
+            mouth_part="bottom lip", 
+            color = MOUTH_PARTS[2]["color"]
+        )
+
+        if box_bl is not None:
+            # Add prompts and get predictions
+            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_points_or_box(
+                inference_state=inference_state,
+                frame_idx=ann_frame_idx,
+                obj_id=ann_obj_id,
+                box=box_bl,
+            )
+
+        if points_bl is not None and labels_bl is not None:
+            # Add prompts and get predictions
+            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_points_or_box(
+                inference_state=inference_state,
+                frame_idx=ann_frame_idx,
+                obj_id=ann_obj_id,
+                points=points_bl,
+                labels=labels_bl,
+            )
+
+    # Return the model and the prompted inference state
+    return sam2_predictor, inference_state
+
+
+def create_lip_masks(sam2_predictor, inference_state):
+    # Storing the SAM2 Segmentation results in a memory-efficient way using indices and offsets
+    upper_indices = []
+    upper_offsets = [0]
+
+    lower_indices = []
+    lower_offsets = [0]
+
+    for out_frame_idx, out_obj_ids, out_mask_logits in sam2_predictor.propagate_in_video(
+        inference_state
+    ):
+        for i, out_obj_id in enumerate(out_obj_ids):
+
+            mask = (out_mask_logits[i] > 0.0).cpu().numpy()[0]
+
+            indices = np.flatnonzero(mask).astype(np.uint32)
+
+            if out_obj_id == 1:
+                upper_indices.append(indices)
+                upper_offsets.append(
+                    upper_offsets[-1] + len(indices)
+                )
+
+            elif out_obj_id == 2:
+                lower_indices.append(indices)
+                lower_offsets.append(
+                    lower_offsets[-1] + len(indices)
+                )
+
+    upper_indices = np.concatenate(upper_indices)
+    lower_indices = np.concatenate(lower_indices)
+
+    upper_offsets = np.asarray(upper_offsets, dtype=np.uint64)
+    lower_offsets = np.asarray(lower_offsets, dtype=np.uint64)
+
+    return upper_indices, lower_indices, upper_offsets, lower_offsets
+
+
 def generate_mouth_crop_box(frame):
     """
     Ask the user to draw a bounding box around the mouth region.

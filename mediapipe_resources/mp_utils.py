@@ -1,7 +1,6 @@
 import cv2
 import mediapipe as mp
 import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 # MediaPipe
@@ -59,12 +58,21 @@ def initialize_mp():
     base_options = python.BaseOptions(model_asset_path="mediapipe_resources/face_landmarker.task")
     options = vision.FaceLandmarkerOptions(base_options=base_options, 
                                            running_mode=vision.RunningMode.VIDEO, 
-                                           output_face_blendshapes=False, num_faces=1)
+                                           output_face_blendshapes=True, num_faces=1)
     detector = vision.FaceLandmarker.create_from_options(options)
     return detector
 
 
-def run_mp_for_video(path_to_video, mp_detector):
+def run_mp_for_video(path_to_video, mp_detector, grayscale=False):
+    """
+    Runs the MediaPipe face landmarker on every frame of a video.
+
+    grayscale : bool
+        If True, each frame is converted to grayscale (then back to 3 channels,
+        since MediaPipe expects SRGB) before detection. This stops coloured
+        lipstick from interfering with the lip landmarks.
+    """
+
     # Initialize frame index
     frame_idx = 0
 
@@ -78,7 +86,8 @@ def run_mp_for_video(path_to_video, mp_detector):
     # Generate MediaPipe landmark predictions for each frame and store results in a list
     mp_results_list = []
 
-    with tqdm(total=total_frames, desc="Generating MediaPipe Landmarks", unit=" frames") as pbar:
+    desc = "Generating MediaPipe Landmarks (grayscale)" if grayscale else "Generating MediaPipe Landmarks"
+    with tqdm(total=total_frames, desc=desc, unit=" frames") as pbar:
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
@@ -87,8 +96,12 @@ def run_mp_for_video(path_to_video, mp_detector):
             # Increment the progress bar manually
             pbar.update(1)
 
-            # Convert to RGB 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Convert to RGB (optionally via grayscale)
+            if grayscale:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+            else:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             mp_image = mp.Image(
                 image_format=mp.ImageFormat.SRGB,
@@ -375,7 +388,70 @@ def draw_mediapipe_lip_contours(rgb_image, detection_result):
     return annotated_image
 
 
-def draw_lip_contours(rgb_image, lm_results, contour_colour):
+def draw_mp_lip_landmarks(rgb_image, height, width, point_radius, detection_result):
+    face_landmarks_list = detection_result.face_landmarks
+    annotated_image = np.copy(rgb_image)
+
+    # Loop through the detected faces to visualize.
+    face_landmarks = face_landmarks_list[0]  # Assuming only one face is detected for simplicity
+    for idx in lip_indices:
+        landmark = face_landmarks[idx]
+        x_pixel = int(landmark.x * width)
+        y_pixel = int(landmark.y * height)
+
+        cv2.circle(
+            annotated_image,
+            (x_pixel, y_pixel),
+            radius=point_radius,
+            color=(255, 255, 255),
+            thickness=-1
+        )
+
+    # Add connections between lip landmarks
+    lip_connections = (
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS
+    )
+
+    for connection in lip_connections:
+
+        start_idx = connection.start
+        end_idx = connection.end
+
+        if start_idx not in lip_indices or end_idx not in lip_indices:
+            continue
+
+        start_landmark = face_landmarks[start_idx]
+        end_landmark = face_landmarks[end_idx]
+
+        # Convert normalized coordinates to pixels
+        start_x = int(
+            start_landmark.x * annotated_image.shape[1]
+        )
+
+        start_y = int(
+            start_landmark.y * annotated_image.shape[0]
+        )
+
+        end_x = int(
+            end_landmark.x * annotated_image.shape[1]
+        )
+
+        end_y = int(
+            end_landmark.y * annotated_image.shape[0]
+        )
+
+        cv2.line(
+            annotated_image,
+            (start_x, start_y),
+            (end_x, end_y),
+            (255, 255, 255),
+            thickness=2
+        )
+
+    return annotated_image
+
+
+def draw_lip_contours(rgb_image, lm_results, contour_colour, contour_thickness):
     ''''
     Draw lines connecting the lip landmarks on the image. The lip landmarks can either
     be the MediaPipe predicted landmarks or the SAM2-influenced landmarks. 
@@ -418,13 +494,13 @@ def draw_lip_contours(rgb_image, lm_results, contour_colour):
             (start_x, start_y),
             (end_x, end_y),
             contour_colour,
-            thickness=2
+            thickness=contour_thickness
         )
 
     return annotated_image
 
 
-def add_lms_to_frame(frame, frame_lm_list, lm_colour=(255, 255, 255), draw_indices = True):
+def add_lms_to_frame(frame, frame_lm_list, only_lips=False, point_radius=6, bgr_lm_colour=(255, 255, 255), draw_indices = True):
     """
     Takes any frame and adds annotated landmarks. Landmarks can be straight from MediaPipe or can 
     be the sam2-influenced landmarks.
@@ -440,12 +516,12 @@ def add_lms_to_frame(frame, frame_lm_list, lm_colour=(255, 255, 255), draw_indic
 
     h, w = frame.shape[:2]
 
-    max_dim = max(h, w)
-    point_radius = round(max_dim*MIN_POINT_RADIUS_RATIO)
-
     output_frame = frame.copy()
 
     for idx, point in enumerate(frame_lm_list):
+
+        if only_lips and idx not in lip_indices:
+            continue
 
         px = int(point.x * w)
         py = int(point.y * h)
@@ -454,7 +530,7 @@ def add_lms_to_frame(frame, frame_lm_list, lm_colour=(255, 255, 255), draw_indic
             output_frame,
             (px, py),
             point_radius,
-            lm_colour,
+            bgr_lm_colour,
             -1
         )
 
@@ -464,12 +540,23 @@ def add_lms_to_frame(frame, frame_lm_list, lm_colour=(255, 255, 255), draw_indic
                 str(idx),
                 (px + 4, py - 4),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.35,
+                0.8,
                 (255, 255, 255),
                 1
             )
 
     return output_frame
+
+
+def add_masks_to_frame(frame, mask_list, mask_colours, alpha=0.5):
+    for lip_mask, color in zip(mask_list, mask_colours):
+        # Apply transparent mask
+        frame[lip_mask] = (
+            alpha * color +
+            (1 - alpha) * frame[lip_mask]
+        ).astype(np.uint8)
+
+    return frame
 
 
 def draw_face_mesh(frame, frame_lm_list):
@@ -536,6 +623,7 @@ def draw_face_mesh(frame, frame_lm_list):
             )
 
     return output_frame
+
 
 # ======== Debugging ========= #
 
