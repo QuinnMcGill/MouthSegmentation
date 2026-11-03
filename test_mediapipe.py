@@ -6,11 +6,11 @@ import argparse
 
 import mediapipe_resources.mp_utils as mp_utils
 
+import refine_landmarks.visualization_utils as vis_utils
+
 # ==== Configuration ==== #
 INPUT_VIDEO_PATH = "mocapvids/"
 OUTPUT_PATH_ROOT = "mediapipe_resources/baseline_mp_results/"
-LARGE_POINT_RADIUS_RATIO = 0.003
-SMALL_POINT_RADIUS_RATIO = 0.0015
 
 # ==== Parse command-line arguments ==== #
 parser = argparse.ArgumentParser(description="Running Mediapipe Face Landmarker on Performance Videos")
@@ -47,8 +47,8 @@ with mp_utils.initialize_mp() as mp_detector:
     mp_results_list = mp_utils.run_mp_for_video(input_video_path, mp_detector, grayscale=(args.mp_input == "gray"))
 
 max_dim = max(frame_height, frame_width)
-large_point_radius = round(max_dim*LARGE_POINT_RADIUS_RATIO)
-small_point_radius = round(max_dim*SMALL_POINT_RADIUS_RATIO)
+large_point_radius = round(max_dim*vis_utils.LARGE_POINT_RADIUS_RATIO)
+small_point_radius = round(max_dim*vis_utils.SMALL_POINT_RADIUS_RATIO)
 
 frame_idx = 0
 with tqdm(total=num_frames, desc="Creating Video of Refined Lip Landmarks") as pbar:
@@ -63,12 +63,12 @@ with tqdm(total=num_frames, desc="Creating Video of Refined Lip Landmarks") as p
 
         # Draw the refined lip landmarks (frames past the end of the results are written unchanged)
         if frame_idx < len(mp_results_list):
-            output_frame = mp_utils.draw_face_mesh(output_frame, mp_results_list[frame_idx])
-            output_frame = mp_utils.draw_lip_contours(output_frame, mp_results_list[frame_idx], contour_colour=(255, 0, 0), contour_thickness=6)
-            output_frame = mp_utils.add_lms_to_frame(output_frame, mp_results_list[frame_idx],
+            output_frame = vis_utils.draw_face_mesh(output_frame, mp_results_list[frame_idx])
+            output_frame = vis_utils.draw_lip_contours(output_frame, mp_results_list[frame_idx], contour_colour=(255, 0, 0), contour_thickness=6)
+            output_frame = vis_utils.add_lms_to_frame(output_frame, mp_results_list[frame_idx],
                                                     only_lips=True, point_radius=large_point_radius,
                                                     bgr_lm_colour=(255, 255, 255), draw_indices=False)
-            output_frame = mp_utils.add_lms_to_frame(output_frame, mp_results_list[frame_idx],
+            output_frame = vis_utils.add_lms_to_frame(output_frame, mp_results_list[frame_idx],
                                                     only_lips=False, point_radius=small_point_radius,
                                                     bgr_lm_colour=(255, 255, 255), draw_indices=False)
 

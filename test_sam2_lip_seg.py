@@ -23,8 +23,8 @@ from sam2.sam2_video_predictor import SAM2VideoPredictor    #type:ignore
 from sam2_resources import sam2_utils as sam2_utils
 
 # Processing SAM2 Masks
-# import mediapipe_resources.mp_helpers as mph
 import refine_landmarks.data_manager as data_manager
+import refine_landmarks.visualization_utils as vis_utils
 
 # ====== Step 1: Setup the environment ====== #
 
@@ -71,14 +71,14 @@ sam2_predictor = sam2_utils.initialize_sam2(base_model, device, weights_path)
 
 # `vid_frames_dir` is a directory of JPEG frames with filenames like `<frame_index>.jpg`
 tc_name = args.v.split('.mp4')[0]
-vid_frames_dir = os.path.join("mocapvids/vid_frames", os.path.splitext(args.v)[0])
+vid_frames_dir = os.path.join("input/vid_frames", os.path.splitext(args.v)[0])
 
 # Load the original video to get the correct frame rate for the output video
-vid_path = "mocapvids/" + args.v
-cap = cv2.VideoCapture(vid_path)
+input_vid_path = "input/input_vids/" + args.v
+cap = cv2.VideoCapture(input_vid_path)
 
 if not cap.isOpened():
-    raise RuntimeError(f"Could not open video: {vid_path}")
+    raise RuntimeError(f"Could not open video: {input_vid_path}")
 
 # Get input frame rate (fps) to use for the output video
 fps = cap.get(cv2.CAP_PROP_FPS)
@@ -98,23 +98,6 @@ first_frame = np.array(Image.open(os.path.join(vid_frames_dir, frame_names[0])))
 
 # ====== Step 4: Run SAM2 Segmentation with Finetuned Weights ====== #
 
-mouth_parts = {
-    1: {
-        "name": "Upper Lip",
-        "color": np.array([255, 0, 0], dtype=np.uint8)   # Red
-    },
-
-    2: {
-        "name": "Lower Lip",
-        "color": np.array([0, 255, 0], dtype=np.uint8)   # Green
-    },
-
-    3: {
-        "name": "Tongue",
-        "color": np.array([0, 0, 255], dtype=np.uint8)   # Blue
-    }
-}
-
 # Prompt the model with bounding boxes and prompt points for the upper and lower lip
 sam2_predictor, inference_state = sam2_utils.run_sam2_lip_seg(num_parts_per_object=args.npp, 
                                                                 vid_frames_dir=vid_frames_dir, 
@@ -126,67 +109,68 @@ upper_offsets, lower_offsets) = sam2_utils.create_lip_masks(sam2_predictor=sam2_
 
 # ====== Step 6: Create Segmentation Video ====== #
 
+# --------------------------------------------------
+# Optional mouth crop
+# --------------------------------------------------
+mouth_crop_box = None
+
+if args.crop_mouth == 1:
+
+    mouth_crop_box = sam2_utils.generate_mouth_crop_box(first_frame)
+
+    if mouth_crop_box is None:
+        raise RuntimeError(
+            "No mouth crop bounding box was selected."
+        )
+
+    x_min, y_min, x_max, y_max = mouth_crop_box
+
+    # Clamp coordinates to valid image boundaries
+    x_min = max(0, min(x_min, frame_width))
+    x_max = max(0, min(x_max, frame_width))
+    y_min = max(0, min(y_min, frame_height))
+    y_max = max(0, min(y_max, frame_height))
+
+    if x_max <= x_min or y_max <= y_min:
+        raise ValueError(
+            f"Invalid mouth crop box: "
+            f"{[x_min, y_min, x_max, y_max]}"
+        )
+
+    crop_width = x_max - x_min
+    crop_height = y_max - y_min
+
+else:
+
+    # No cropping
+    x_min = 0
+    y_min = 0
+    x_max = frame_width
+    y_max = frame_height
+
+    crop_width = frame_width
+    crop_height = frame_height
+
+output_dir = "output/sam2_lip_seg_results"
+os.makedirs(output_dir, exist_ok=True)
+
+# Output video path
+output_video_path = os.path.join(output_dir, f"bb_{base_model}_{dataset}_fw{fw_idx}_{args.npp}pp_{args.v}")
+
+fourcc = cv2.VideoWriter.fourcc(*'mp4v')
+video_writer = cv2.VideoWriter(
+    output_video_path,
+    fourcc,
+    fps,
+    (crop_width, crop_height) 
+)
+
+# Formatting the SAM2 masks
+alpha = 0.3
+
 with tqdm(total=num_frames, desc="Creating Lip Segmentation Video") as pbar:
 
-    # --------------------------------------------------
-    # Optional mouth crop
-    # --------------------------------------------------
-
-    mouth_crop_box = None
-
-    if args.crop_mouth == 1:
-
-        mouth_crop_box = sam2_utils.generate_mouth_crop_box(first_frame)
-
-        if mouth_crop_box is None:
-            raise RuntimeError(
-                "No mouth crop bounding box was selected."
-            )
-
-        x_min, y_min, x_max, y_max = mouth_crop_box
-
-        # Clamp coordinates to valid image boundaries
-        x_min = max(0, min(x_min, frame_width))
-        x_max = max(0, min(x_max, frame_width))
-        y_min = max(0, min(y_min, frame_height))
-        y_max = max(0, min(y_max, frame_height))
-
-        if x_max <= x_min or y_max <= y_min:
-            raise ValueError(
-                f"Invalid mouth crop box: "
-                f"{[x_min, y_min, x_max, y_max]}"
-            )
-
-        crop_width = x_max - x_min
-        crop_height = y_max - y_min
-
-    else:
-
-        # No cropping
-        x_min = 0
-        y_min = 0
-        x_max = frame_width
-        y_max = frame_height
-
-        crop_width = frame_width
-        crop_height = frame_height
-
-    # Output video path
-    output_video_path = f"bb_seg_results/bb_{base_model}_{dataset}_fw{fw_idx}_{args.npp}pp_{args.v}"
-
-    fourcc = cv2.VideoWriter.fourcc(*'mp4v')
-    video_writer = cv2.VideoWriter(
-        output_video_path,
-        fourcc,
-        fps,
-        (crop_width, crop_height) 
-    )
-
-    alpha = 0.3
-
-    # ----- Generate Frames ------ #
-
-    for frame_idx in range(len(frame_names)):
+    for frame_idx in range(num_frames):
 
         frame_path = os.path.join(vid_frames_dir, frame_names[frame_idx])
 
@@ -194,7 +178,7 @@ with tqdm(total=num_frames, desc="Creating Lip Segmentation Video") as pbar:
             Image.open(frame_path).convert("RGB")
         )
 
-        overlay = frame.copy()
+        output_frame = frame.copy()
 
         # Create SAM2 upper and lower lip masks
         upper_mask = data_manager.reconstruct_mask(
@@ -213,58 +197,8 @@ with tqdm(total=num_frames, desc="Creating Lip Segmentation Video") as pbar:
             width=frame_width
         )
 
-        for obj_id, raw_mask in zip([UPPER_LIP_OBJ_ID, LOWER_LIP_OBJ_ID], [upper_mask, lower_mask]):
-
-            color = mouth_parts[obj_id]["color"]
-
-            # Apply transparent mask
-            overlay[raw_mask] = (
-                alpha * color +
-                (1 - alpha) * overlay[raw_mask]
-            ).astype(np.uint8)
-
-            # Optional: draw contours
-            contours, _ = cv2.findContours(
-                raw_mask.astype(np.uint8),
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE
-            )
-
-            cv2.drawContours(
-                overlay,
-                contours,
-                -1,
-                (255, 255, 255),
-                2
-            )
-
-            # Optional: add label text
-            ys, xs = np.where(raw_mask)
-
-            if len(xs) > 0 and len(ys) > 0:
-
-                center_x = int(np.mean(xs))
-                center_y = int(np.mean(ys))
-
-                cv2.putText(
-                    overlay,
-                    mouth_parts[obj_id]["name"],
-                    (center_x, center_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA
-                )
-
-        # Blend overlay with original frame
-        output_frame = cv2.addWeighted(
-            frame,
-            1 - alpha,
-            overlay,
-            alpha,
-            0
-        )
+        mask_list = [upper_mask, lower_mask]
+        output_frame = vis_utils.add_masks_to_frame(frame, mask_list=mask_list, alpha=alpha)
 
         # Crop the output frame if mouth cropping is enabled
         output_frame = output_frame[

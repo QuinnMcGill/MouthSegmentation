@@ -22,22 +22,14 @@ from sam2.sam2_video_predictor import SAM2VideoPredictor        #type:ignore
 from sam2_resources import sam2_utils
 
 # MediaPipe
-import mediapipe_resources.mp_utils as mp_utils
+import mediapipe_resources.mediapipe_utils as mediapipe_utils
 import mediapipe_resources.blendshape_model as blendshape_model
 
 # Processing SAM2 Masks and refineing Mediapipe landmarks
 import refine_landmarks.refinement_utils as refinement_utils
 import refine_landmarks.data_manager as data_manager
-import refine_landmarks.extract_sam2_lip_results as sam2_processor
-
-# CONTROL PARAMETERS
-UPPER_LIP_OBJ_ID = 1
-LOWER_LIP_OBJ_ID = 2
-TONGUE_OBJ_ID = 3
-
-# VISUALIZATION PARAMETERS
-LARGE_POINT_RADIUS_RATIO = 0.003
-SMALL_POINT_RADIUS_RATIO = 0.0015
+import sam2_resources.sam2_lip_seg_processor as sam2_lip_seg_processor
+import refine_landmarks.visualization_utils as vis_utils
 
 # ====== Step 1: Setup the environment ====== #
 
@@ -85,14 +77,14 @@ bs_predictor = blendshape_model.BlendshapePredictor("mediapipe_resources/face_la
 
 # `vid_frames_dir` is a directory of JPEG frames with filenames like `<frame_index>.jpg`
 tc_name = args.v.split('.mp4')[0]
-vid_frames_dir = os.path.join("mocapvids/vid_frames", os.path.splitext(args.v)[0])
+vid_frames_dir = os.path.join("input/vid_frames", os.path.splitext(args.v)[0])
 
 # Load the original video to get the correct frame rate for the output video
-vid_path = "mocapvids/" + args.v
-cap = cv2.VideoCapture(vid_path)
+input_vid_path = "input/input_vids/" + args.v
+cap = cv2.VideoCapture(input_vid_path)
 
 if not cap.isOpened():
-    raise RuntimeError(f"Could not open video: {vid_path}")
+    raise RuntimeError(f"Could not open video: {input_vid_path}")
 
 # Get input frame rate (fps) to use for the output video
 fps = cap.get(cv2.CAP_PROP_FPS)
@@ -119,9 +111,9 @@ if args.debug == 0:    # Generate new prompts (no saved state)
     upper_offsets, lower_offsets) = sam2_utils.create_lip_masks(sam2_predictor=sam2_predictor, inference_state=inference_state)
 
     # ------ Run Mediapipe Face Landmarker ------ #
-    with mp_utils.initialize_mp() as mp_detector:
-        mp_results_list = mp_utils.run_mp_for_video(os.path.join("mocapvids", args.v), mp_detector, grayscale=(args.mp_input == "gray"))
-    mp_lip_coords = mp_utils.extract_lip_landmarks_coords(mp_results_list)
+    with mediapipe_utils.initialize_mp() as mp_detector:
+        mp_results_list = mediapipe_utils.run_mp_for_video(os.path.join("mocapvids", args.v), mp_detector, grayscale=(args.mp_input == "gray"))
+    mp_lip_coords = mediapipe_utils.extract_lip_landmarks_coords(mp_results_list)
 
     data_manager.save_state_stage1(upper_indices, lower_indices, upper_offsets, lower_offsets, mp_results_list, mp_lip_coords, save_path)
 else:               # Use a saved state
@@ -142,7 +134,7 @@ print(f"Saved pre-refinement blendshapes to: {bs_before_path}")
 sam2_mp_results = mp_results_list.copy()
 
 # Process the SAM2 results (corner prediction, contour smoothing, etc.) for the entire clip.
-sam2_contours, sam2_corners = sam2_processor.get_sam2_contours_and_corners(save_path, 
+sam2_contours, sam2_corners = sam2_lip_seg_processor.get_sam2_contours_and_corners(save_path, 
                                                                         frame_height=frame_height, 
                                                                         frame_width=frame_width)
 
@@ -165,7 +157,7 @@ with tqdm(total=len(mp_lip_coords), desc="Refining MediaPipe Lip Landmarks with 
         # Grab the SAM2 contours and corners for this frame
         sam2_contours_frame, sam2_corners_frame = sam2_contours[frame_idx], sam2_corners[frame_idx]
 
-        for obj_id in [UPPER_LIP_OBJ_ID, LOWER_LIP_OBJ_ID]:
+        for obj_id in [sam2_utils.UPPER_LIP_OBJ_ID, sam2_utils.LOWER_LIP_OBJ_ID]:
 
             # Call to function in refinement_utils.py to generate refined MediaPipe landmarks (excluding
             # lip corners, since this should come from the SAM2 masks) 
@@ -173,7 +165,7 @@ with tqdm(total=len(mp_lip_coords), desc="Refining MediaPipe Lip Landmarks with 
                                                                             sam2_contours_frame, sam2_corners_frame)
 
             # Replace the original Mediapipe ladnmarks with these SAM2-guided points
-            frame_landmarks = mp_utils.replace_mp_lip_landmarks(frame_landmarks, obj_id, upper_points,
+            frame_landmarks = mediapipe_utils.replace_mp_lip_landmarks(frame_landmarks, obj_id, upper_points,
                                                                 lower_points, frame_height, frame_width)
         
         # Save the refined landmark results
@@ -199,8 +191,8 @@ print(f"Saved post-refinement blendshapes to: {bs_after_path}")
 # ====== Step 6: Create Segmentation Video ====== #
 
 # Output video path
-output_video_path = f"sam2_guided_mp_results/fw{fw_idx}_{args.v}"
-os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
+output_video_dir = f"output/sam2_guided_mp_results/"
+output_video_path = os.path.join(output_video_dir, f"fw{fw_idx}_{args.v}")
 
 fourcc = cv2.VideoWriter.fourcc(*'mp4v')
 video_writer = cv2.VideoWriter(
@@ -211,14 +203,14 @@ video_writer = cv2.VideoWriter(
 )
 
 max_dim = max(frame_height, frame_width)
-large_point_radius = round(max_dim*LARGE_POINT_RADIUS_RATIO)
-small_point_radius = round(max_dim*SMALL_POINT_RADIUS_RATIO)
+large_point_radius = round(max_dim*vis_utils.LARGE_POINT_RADIUS_RATIO)
+small_point_radius = round(max_dim*vis_utils.SMALL_POINT_RADIUS_RATIO)
 
 # Load the input video file
-cap = cv2.VideoCapture(vid_path)
+cap = cv2.VideoCapture(input_vid_path)
 
 if not cap.isOpened():
-    raise RuntimeError(f"Could not open video: {vid_path}")
+    raise RuntimeError(f"Could not open video: {input_vid_path}")
 
 frame_idx = 0
 
@@ -234,12 +226,12 @@ with tqdm(total=len(mp_lip_coords), desc="Creating Video of Refined Lip Landmark
 
         # Draw the refined lip landmarks (frames past the end of the results are written unchanged)
         if frame_idx < len(sam2_mp_results):
-            output_frame = mp_utils.draw_face_mesh(output_frame, sam2_mp_results[frame_idx])
-            output_frame = mp_utils.draw_lip_contours(output_frame, sam2_mp_results[frame_idx], contour_colour=(255, 0, 0), contour_thickness=6)
-            output_frame = mp_utils.add_lms_to_frame(output_frame, sam2_mp_results[frame_idx],
+            output_frame = vis_utils.draw_face_mesh(output_frame, sam2_mp_results[frame_idx])
+            output_frame = vis_utils.draw_lip_contours(output_frame, sam2_mp_results[frame_idx], contour_colour=(255, 0, 0), contour_thickness=6)
+            output_frame = vis_utils.add_lms_to_frame(output_frame, sam2_mp_results[frame_idx],
                                                     only_lips=True, point_radius=large_point_radius,
                                                     bgr_lm_colour=(255, 255, 255), draw_indices=False)
-            output_frame = mp_utils.add_lms_to_frame(output_frame, sam2_mp_results[frame_idx],
+            output_frame = vis_utils.add_lms_to_frame(output_frame, sam2_mp_results[frame_idx],
                                                     only_lips=False, point_radius=small_point_radius,
                                                     bgr_lm_colour=(255, 255, 255), draw_indices=False)
 
